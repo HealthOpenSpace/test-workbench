@@ -1,6 +1,6 @@
 import React from 'react';
 import { ChevronDown } from 'lucide-react';
-import { DataModel } from '../types';
+import { DataModel } from '../../types';
 
 interface ModelSelectorProps {
   models: DataModel[];

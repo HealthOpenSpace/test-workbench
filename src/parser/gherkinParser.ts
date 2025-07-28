@@ -4,7 +4,7 @@ import {
   ParsedScenario, 
   ParseError, 
   DataModel 
-} from '../types';
+} from '../../types';
 
 export class GherkinParser {
   private dataModel: DataModel;

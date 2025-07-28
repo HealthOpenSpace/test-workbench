@@ -1,7 +1,7 @@
 import React from 'react';
 import { Editor as MonacoEditor } from '@monaco-editor/react';
 import { Download, Copy, CheckCircle, AlertCircle } from 'lucide-react';
-import { XMLOutput, ParseError } from '../types';
+import { XMLOutput, ParseError } from '../../types';
 
 interface OutputPanelProps {
   xmlOutput: XMLOutput | null;

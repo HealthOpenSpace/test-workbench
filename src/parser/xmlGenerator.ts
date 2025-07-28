@@ -1,4 +1,4 @@
-import { ParsedScenario, XMLOutput, Scriptlet } from '../types';
+import { ParsedScenario, XMLOutput, Scriptlet } from '../../types';
 import { GherkinParser } from './gherkinParser';
 
 export class XMLGenerator {
