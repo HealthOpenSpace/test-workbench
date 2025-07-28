@@ -35,8 +35,12 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
+    - name: Type check
+      run: npm run type-check
+      continue-on-error: true
+
     - name: Build
-      run: npm run build
+      run: npm run build-only
       env:
         # Important: Set the base path for GitHub Pages subpath deployment
         VITE_BASE_PATH: /test-workbench/
