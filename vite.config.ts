@@ -4,7 +4,8 @@ import react from '@vitejs/plugin-react'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  base: '/test-workbench/', // Replace with your repo name
+  // Use environment variable for base path, fallback to /test-workbench/ for GitHub Pages
+  base: process.env.VITE_BASE_PATH || '/test-workbench/',
   optimizeDeps: {
     include: ['monaco-editor']
   },
@@ -24,5 +25,11 @@ export default defineConfig({
   server: {
     port: 3000,
     open: true
+  },
+  define: {
+    global: 'globalThis',
+  },
+  worker: {
+    format: 'es'
   }
 })
