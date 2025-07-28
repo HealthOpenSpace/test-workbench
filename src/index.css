@@ -188,3 +188,74 @@ body {
     @apply border-2 border-gray-800 dark:border-gray-200;
   }
 }
+
+/* Monaco Editor Dark Mode Overrides */
+.dark .monaco-editor .margin {
+  background-color: #111827 !important;
+}
+
+.dark .monaco-editor .glyph-margin {
+  background-color: #111827 !important;
+}
+
+.dark .monaco-editor .line-numbers {
+  color: #6b7280 !important;
+}
+
+.dark .monaco-editor .active-line-number.line-numbers {
+  color: #9ca3af !important;
+}
+
+/* Light mode line numbers (optional, for consistency) */
+.monaco-editor .margin {
+  background-color: #f9fafb !important;
+}
+
+.monaco-editor .line-numbers {
+  color: #6b7280 !important;
+}
+
+.monaco-editor .active-line-number.line-numbers {
+  color: #111827 !important;
+}
+
+/* Monaco Editor Text Color in Dark Mode */
+.dark .monaco-editor,
+.dark .monaco-editor-background,
+.dark .monaco-editor .inputarea.ime-input {
+  background-color: #1f2937 !important;
+}
+
+/* Ensure all text is light colored in dark mode */
+.dark .monaco-editor .view-lines {
+  color: #d4d4d4 !important;
+}
+
+.dark .monaco-editor .view-line span {
+  color: inherit !important;
+}
+
+/* Force token colors in dark mode */
+.dark .monaco-editor .mtk1 { color: #d4d4d4 !important; } /* default text */
+.dark .monaco-editor .mtk4 { color: #569cd6 !important; } /* keywords */
+.dark .monaco-editor .mtk5 { color: #ce9178 !important; } /* strings */
+.dark .monaco-editor .mtk7 { color: #6a9955 !important; } /* comments */
+.dark .monaco-editor .mtk8 { color: #4ec9b0 !important; } /* types */
+.dark .monaco-editor .mtk9 { color: #c586c0 !important; } /* step keywords */
+.dark .monaco-editor .mtk10 { color: #4fc1ff !important; } /* urls */
+.dark .monaco-editor .mtk11 { color: #608b4e !important; } /* tags */
+
+/* Selection colors */
+.dark .monaco-editor .selected-text {
+  background-color: #4b5563 !important;
+}
+
+.dark .monaco-editor .selectionHighlight {
+  background-color: rgba(75, 85, 99, 0.5) !important;
+}
+
+/* Cursor color */
+.dark .monaco-editor .cursor {
+  background-color: #d4d4d4 !important;
+  color: #d4d4d4 !important;
+}

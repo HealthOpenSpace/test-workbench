@@ -33,9 +33,9 @@ export const Editor: React.FC<EditorProps> = ({ value, onChange, errors, isDark 
       },
     });
 
-    // Define theme
-    monaco.editor.defineTheme('gherkin-theme', {
-      base: isDark ? 'vs-dark' : 'vs',
+    // Define dark theme
+    monaco.editor.defineTheme('gherkin-theme-dark', {
+      base: 'vs-dark',
       inherit: true,
       rules: [
         { token: 'keyword.feature', foreground: '569cd6', fontStyle: 'bold' },
@@ -47,8 +47,55 @@ export const Editor: React.FC<EditorProps> = ({ value, onChange, errors, isDark 
         { token: 'type', foreground: '4ec9b0' },
         { token: 'comment', foreground: '6a9955' },
       ],
-      colors: {},
+      colors: {
+        'editor.background': '#1f2937',
+        'editor.foreground': '#d4d4d4',
+        'editorLineNumber.foreground': '#6b7280',
+        'editorLineNumber.activeForeground': '#9ca3af',
+        'editor.lineHighlightBackground': '#374151',
+        'editor.selectionBackground': '#4b5563',
+        'editorGutter.background': '#111827',
+        'editor.inactiveSelectionBackground': '#4b5563',
+        'editorIndentGuide.background': '#374151',
+        'editorIndentGuide.activeBackground': '#4b5563',
+        'editorRuler.foreground': '#374151',
+      },
     });
+
+    // Define light theme
+    monaco.editor.defineTheme('gherkin-theme-light', {
+      base: 'vs',
+      inherit: true,
+      rules: [
+        { token: 'keyword.feature', foreground: '0000ff', fontStyle: 'bold' },
+        { token: 'keyword.scenario', foreground: '0451a5', fontStyle: 'bold' },
+        { token: 'keyword.step', foreground: 'af00db' },
+        { token: 'tag', foreground: '008000' },
+        { token: 'string', foreground: 'a31515' },
+        { token: 'url', foreground: '0000ff', fontStyle: 'underline' },
+        { token: 'type', foreground: '0451a5' },
+        { token: 'comment', foreground: '008000' },
+      ],
+      colors: {
+        'editor.background': '#ffffff',
+        'editor.foreground': '#000000',
+        'editorLineNumber.foreground': '#6b7280',
+        'editorLineNumber.activeForeground': '#111827',
+        'editorGutter.background': '#f9fafb',
+      },
+    });
+  }, []);
+
+  // Apply theme changes when isDark changes
+  useEffect(() => {
+    if (editorRef.current) {
+      monaco.editor.setTheme(isDark ? 'gherkin-theme-dark' : 'gherkin-theme-light');
+      
+      // Force a layout refresh to ensure theme is applied
+      setTimeout(() => {
+        editorRef.current?.layout();
+      }, 0);
+    }
   }, [isDark]);
 
   useEffect(() => {
@@ -88,7 +135,11 @@ export const Editor: React.FC<EditorProps> = ({ value, onChange, errors, isDark 
       folding: true,
       lineNumbers: 'on',
       glyphMargin: true,
+      theme: isDark ? 'gherkin-theme-dark' : 'gherkin-theme-light',
     });
+
+    // Force initial theme application
+    monaco.editor.setTheme(isDark ? 'gherkin-theme-dark' : 'gherkin-theme-light');
   };
 
   return (
@@ -96,7 +147,7 @@ export const Editor: React.FC<EditorProps> = ({ value, onChange, errors, isDark 
       <MonacoEditor
         height="100%"
         language="gherkin"
-        theme="gherkin-theme"
+        theme={isDark ? 'gherkin-theme-dark' : 'gherkin-theme-light'}
         value={value}
         onChange={(value) => onChange(value || '')}
         onMount={handleEditorDidMount}
