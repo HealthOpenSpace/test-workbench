@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  FileText, 
-  Settings, 
-  Download, 
-  Upload, 
-  Sun, 
-  Moon, 
+import {
+  FileText,
+  Settings,
+  Download,
+  Upload,
+  Sun,
+  Moon,
   HelpCircle,
   Play,
-  Lightbulb
+  Lightbulb,
+  AlertCircle,
+  CheckCircle
 } from 'lucide-react';
 import { Editor } from './components/Editor';
 import { OutputPanel } from './components/OutputPanel';
@@ -179,7 +181,7 @@ function App() {
                   <Upload size={16} />
                   Import
                 </label>
-                
+
                 <button
                   onClick={handleDownloadFeature}
                   className="btn-secondary flex items-center gap-2"
@@ -223,11 +225,10 @@ function App() {
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
-                    className={`px-4 py-3 flex items-center gap-3 transition-colors text-sm font-medium whitespace-nowrap ${
-                      activeTab === tab.id
+                    className={`px-4 py-3 flex items-center gap-3 transition-colors text-sm font-medium whitespace-nowrap ${activeTab === tab.id
                         ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 border-r-2 border-blue-500'
                         : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700'
-                    }`}
+                      }`}
                   >
                     <Icon size={18} />
                     {tab.label}
@@ -271,37 +272,94 @@ function App() {
                 </div>
 
                 {/* Quick Preview */}
+                {/* Right Panel - Issues take precedence over Quick Preview */}
                 <div className="w-80 border-l border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex flex-col">
-                  <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-                    <h3 className="font-semibold text-gray-900 dark:text-gray-100">Quick Preview</h3>
-                  </div>
-                  <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                    {parsedScenario?.scenario.steps.map((step, index) => {
-                      const mapping = parser.getStepMapping(step.text);
-                      return (
-                        <div key={index} className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
-                              {step.type}
-                            </span>
-                            {mapping && (
-                              <span className="text-xs px-2 py-1 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded">
-                                {mapping}
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-sm text-gray-700 dark:text-gray-300">
-                            {step.text}
-                          </p>
-                        </div>
-                      );
-                    }) || (
-                      <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                        <FileText size={32} className="mx-auto mb-2 opacity-50" />
-                        <p>Start writing your scenario</p>
+                  {parsedScenario?.errors && parsedScenario.errors.length > 0 ? (
+                    // Show compilation issues
+                    <>
+                      <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-red-50 dark:bg-red-900/10">
+                        <h3 className="font-semibold text-red-800 dark:text-red-200 flex items-center gap-2">
+                          <AlertCircle size={18} />
+                          Compilation Issues ({parsedScenario.errors.length})
+                        </h3>
                       </div>
-                    )}
-                  </div>
+                      <div className="flex-1 overflow-y-auto">
+                        {parsedScenario.errors.map((error, index) => (
+                          <div
+                            key={index}
+                            className="p-4 border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
+                            onClick={() => {
+                              // Scroll to line in editor
+                              const lines = gherkinContent.split('\n');
+                              let position = 0;
+                              for (let i = 0; i < error.line - 1; i++) {
+                                position += lines[i].length + 1;
+                              }
+                              const textarea = document.querySelector('.monaco-editor textarea') as HTMLTextAreaElement;
+                              if (textarea) {
+                                textarea.focus();
+                                textarea.setSelectionRange(position, position);
+                              }
+                            }}
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className={`mt-0.5 ${error.severity === 'error'
+                                  ? 'text-red-500'
+                                  : 'text-yellow-500'
+                                }`}>
+                                <AlertCircle size={16} />
+                              </div>
+                              <div className="flex-1">
+                                <div className="font-medium text-gray-900 dark:text-gray-100">
+                                  Line {error.line}: {error.message}
+                                </div>
+                                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                  {error.severity === 'error' ? 'Error' : 'Warning'}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    // Show quick preview when no issues
+                    <>
+                      <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+                        <h3 className="font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                          <CheckCircle size={18} className="text-green-500" />
+                          Quick Preview
+                        </h3>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                        {parsedScenario?.scenario.steps.map((step, index) => {
+                          const mapping = parser.getStepMapping(step.text);
+                          return (
+                            <div key={index} className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
+                                  {step.type}
+                                </span>
+                                {mapping && (
+                                  <span className="text-xs px-2 py-1 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded">
+                                    {mapping}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-sm text-gray-700 dark:text-gray-300">
+                                {step.text}
+                              </p>
+                            </div>
+                          );
+                        }) || (
+                            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                              <FileText size={32} className="mx-auto mb-2 opacity-50" />
+                              <p>Start writing your scenario</p>
+                            </div>
+                          )}
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             )}
@@ -356,8 +414,8 @@ const HelpPanel: React.FC<{ selectedModel: DataModel }> = ({ selectedModel }) =>
             </h3>
             <div className="prose dark:prose-invert">
               <p className="text-gray-700 dark:text-gray-300">
-                This tool allows you to write Gherkin scenarios with FHIR-style extensions and 
-                compile them into ITB XML test cases. The compiler supports multiple data models 
+                This tool allows you to write Gherkin scenarios with FHIR-style extensions and
+                compile them into ITB XML test cases. The compiler supports multiple data models
                 and provides real-time validation and syntax highlighting.
               </p>
             </div>
