@@ -19,6 +19,7 @@ import { ExamplesPanel } from './components/ExamplesPanel';
 import { GherkinParser } from './parser/gherkinParser';
 import { XMLGenerator } from './parser/xmlGenerator';
 import { dataModels, exampleScenarios } from './data/models';
+import { validateTDL } from './validation/gitbValidator.ts';
 import { DataModel, ExampleScenario, ParsedScenario, XMLOutput } from './types';
 
 type TabType = 'editor' | 'output' | 'examples' | 'help';
@@ -27,28 +28,59 @@ function App() {
   const [activeTab, setActiveTab] = useState<TabType>('editor');
   const [selectedModel, setSelectedModel] = useState<DataModel>(dataModels[0]);
   const [gherkinContent, setGherkinContent] = useState<string>('');
+  const [parsedScenario, setParsedScenario] = useState<ParsedScenario | null>(null);
+  const [issues, setIssues] = useState<any[]>([]);
   const [isDark, setIsDark] = useState(() => {
     const saved = window.localStorage?.getItem('theme');
     return saved ? saved === 'dark' : window.matchMedia?.('(prefers-color-scheme: dark)').matches || false;
   });
 
-  // Memoized parser and generator
+  /** Parser & Generator instances (memoized) */
   const parser = useMemo(() => new GherkinParser(selectedModel), [selectedModel]);
   const generator = useMemo(() => new XMLGenerator(parser), [parser]);
 
-  // Parse content whenever it changes
-  const parsedScenario: ParsedScenario | null = useMemo(() => {
-    if (!gherkinContent.trim()) return null;
-    return parser.parse(gherkinContent);
+  /** Parse + expand to IR whenever content (or model) changes */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!gherkinContent.trim()) {
+          setParsedScenario(null);
+          setIssues([]);
+          return;
+        }
+        const parsed = parser.parse(gherkinContent);           // your existing parse -> AST + basic checks
+        await parser.expandScenarioToIR(parsed);               // loads lang/en.yml and maps steps -> IR
+        if (!cancelled) {
+          setParsedScenario(parsed);
+          setIssues(parsed.errors ?? []);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setParsedScenario(null);
+          setIssues([{ severity: 'error', message: String(e?.message ?? e), line: 1 }]);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
   }, [gherkinContent, parser]);
 
-  // Generate XML whenever parsed scenario changes
+  /** Generate XML from IR */
   const xmlOutput: XMLOutput | null = useMemo(() => {
     if (!parsedScenario) return null;
     return generator.generate(parsedScenario);
   }, [parsedScenario, generator]);
 
-  // Theme management
+  /** Optional: validate the generated XML (schema) and merge issues */
+  useEffect(() => {
+    (async () => {
+      if (!xmlOutput || !parsedScenario) return;
+      const schemaIssues = await validateTDL(xmlOutput.xml); // returns ParseIssue[]
+      setIssues([...(parsedScenario.errors ?? []), ...schemaIssues]);
+    })();
+  }, [xmlOutput, parsedScenario]);
+
+  /** Theme */
   useEffect(() => {
     const root = document.documentElement;
     if (isDark) {
@@ -63,24 +95,19 @@ function App() {
     window.localStorage?.setItem('theme', isDark ? 'dark' : 'light');
   }, [isDark]);
 
-  // Load default example
+  /** Load default example for the selected model */
   useEffect(() => {
     if (!gherkinContent && exampleScenarios.length > 0) {
-      const defaultExample = exampleScenarios.find(ex => ex.dataModel === selectedModel.id);
-      if (defaultExample) {
-        setGherkinContent(defaultExample.content);
-      }
+      const def = exampleScenarios.find(ex => ex.dataModel === selectedModel.id);
+      if (def) setGherkinContent(def.content);
     }
   }, [selectedModel.id, gherkinContent]);
 
   const handleModelChange = (model: DataModel) => {
     setSelectedModel(model);
-    // Load a default example for the new model if current content is empty
     if (!gherkinContent.trim()) {
-      const example = exampleScenarios.find(ex => ex.dataModel === model.id);
-      if (example) {
-        setGherkinContent(example.content);
-      }
+      const ex = exampleScenarios.find(e => e.dataModel === model.id);
+      if (ex) setGherkinContent(ex.content);
     }
   };
 
@@ -114,7 +141,6 @@ function App() {
       };
       reader.readAsText(file);
     }
-    // Reset input
     event.target.value = '';
   };
 
@@ -133,7 +159,7 @@ function App() {
   };
 
   const handleCompile = () => {
-    if (parsedScenario && !parsedScenario.errors.some(e => e.severity === 'error')) {
+    if (parsedScenario && !issues.some(e => e.severity === 'error')) {
       setActiveTab('output');
     }
   };
@@ -196,7 +222,7 @@ function App() {
               <button
                 onClick={handleCompile}
                 className="btn-primary flex items-center gap-2"
-                disabled={!parsedScenario || parsedScenario.errors.some(e => e.severity === 'error')}
+                disabled={!parsedScenario || issues.some(e => e.severity === 'error')}
               >
                 <Play size={16} />
                 Compile
@@ -252,10 +278,8 @@ function App() {
                       {parsedScenario && (
                         <>
                           <span>{parsedScenario.scenario.steps.length} steps</span>
-                          {parsedScenario.errors.length > 0 && (
-                            <span className="text-red-500">
-                              • {parsedScenario.errors.length} issues
-                            </span>
+                          {issues.length > 0 && (
+                            <span className="text-red-500">• {issues.length} issues</span>
                           )}
                         </>
                       )}
@@ -265,36 +289,32 @@ function App() {
                     <Editor
                       value={gherkinContent}
                       onChange={setGherkinContent}
-                      errors={parsedScenario?.errors || []}
+                      errors={issues}
                       isDark={isDark}
                     />
                   </div>
                 </div>
 
-                {/* Quick Preview */}
-                {/* Right Panel - Issues take precedence over Quick Preview */}
+                {/* Quick Preview / Issues */}
                 <div className="w-80 border-l border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex flex-col">
-                  {parsedScenario?.errors && parsedScenario.errors.length > 0 ? (
-                    // Show compilation issues
+                  {issues.length > 0 ? (
                     <>
                       <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-red-50 dark:bg-red-900/10">
                         <h3 className="font-semibold text-red-800 dark:text-red-200 flex items-center gap-2">
                           <AlertCircle size={18} />
-                          Compilation Issues ({parsedScenario.errors.length})
+                          Compilation Issues ({issues.length})
                         </h3>
                       </div>
                       <div className="flex-1 overflow-y-auto">
-                        {parsedScenario.errors.map((error, index) => (
+                        {issues.map((error, index) => (
                           <div
                             key={index}
                             className="p-4 border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
                             onClick={() => {
-                              // Scroll to line in editor
                               const lines = gherkinContent.split('\n');
                               let position = 0;
-                              for (let i = 0; i < error.line - 1; i++) {
-                                position += lines[i].length + 1;
-                              }
+                              const line = Math.max(1, error.line || 1);
+                              for (let i = 0; i < line - 1; i++) position += lines[i]?.length + 1 || 1;
                               const textarea = document.querySelector('.monaco-editor textarea') as HTMLTextAreaElement;
                               if (textarea) {
                                 textarea.focus();
@@ -303,17 +323,14 @@ function App() {
                             }}
                           >
                             <div className="flex items-start gap-3">
-                              <div className={`mt-0.5 ${error.severity === 'error'
-                                  ? 'text-red-500'
-                                  : 'text-yellow-500'
-                                }`}>
+                              <div className={`mt-0.5 ${error.severity === 'error' ? 'text-red-500' : 'text-yellow-500'}`}>
                                 <AlertCircle size={16} />
                               </div>
                               <div className="flex-1">
                                 <div className="font-medium text-gray-900 dark:text-gray-100">
-                                  Line {error.line}: {error.message}
+                                  {error.line ? `Line ${error.line}: ` : ''}{error.message}
                                 </div>
-                                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                <div className="text-xs text-gray-5 00 dark:text-gray-400 mt-1">
                                   {error.severity === 'error' ? 'Error' : 'Warning'}
                                 </div>
                               </div>
@@ -323,7 +340,6 @@ function App() {
                       </div>
                     </>
                   ) : (
-                    // Show quick preview when no issues
                     <>
                       <div className="p-4 border-b border-gray-200 dark:border-gray-700">
                         <h3 className="font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
@@ -352,11 +368,11 @@ function App() {
                             </div>
                           );
                         }) || (
-                            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                              <FileText size={32} className="mx-auto mb-2 opacity-50" />
-                              <p>Start writing your scenario</p>
-                            </div>
-                          )}
+                          <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                            <FileText size={32} className="mx-auto mb-2 opacity-50" />
+                            <p>Start writing your scenario</p>
+                          </div>
+                        )}
                       </div>
                     </>
                   )}
@@ -368,7 +384,7 @@ function App() {
               <div className="flex-1 min-h-0">
                 <OutputPanel
                   xmlOutput={xmlOutput}
-                  errors={parsedScenario?.errors || []}
+                  errors={issues}
                   isDark={isDark}
                   onDownload={handleDownloadXML}
                 />

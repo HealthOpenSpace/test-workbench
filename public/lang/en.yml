@@ -1,0 +1,194 @@
+version: 1
+locale: en
+steps:
+  - match: '^the test session is set up with dataset ingestion "(Y|N)" and server api root from SYSTEM$'
+    actions:
+      - call:
+          path: scriptlets/setupData.xml
+          inputs:
+            ingestData: '$1'
+            serverApiRoot: '$SYSTEM{serverApiRoot}'
+
+  - match: '^I register an allergy with:$'
+    table:
+      required: [codeCode, codeDisplay, codeText, reactionCode, reactionDisplay]
+    actions:
+      - call:
+          path: scriptlets/registerAllergy.xml
+          output: 'lastRegistered'
+          inputs:
+            codeCode: '$row.codeCode'
+            codeDisplay: '$row.codeDisplay'
+            codeText: '$row.codeText'
+            reactionCode: '$row.reactionCode'
+            reactionDisplay: '$row.reactionDisplay'
+
+  - match: '^save the returned identifier as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - assign:
+          to: '$1'
+          value: '$lastRegistered'
+
+  - match: "^the patient's registered allergies should include:$"
+    table:
+      required: [code, identifier]
+    actions:
+      - assign:
+          to: 'expectedData'
+          value: []
+      - foreach:
+          from: '$tableRows'
+          do:
+            - listAppend:
+                list: 'expectedData'
+                item:
+                  code: '$row.code'
+                  identifier: '$row.identifier'
+      - call:
+          path: scriptlets/checkRegisteredAllergies.xml
+          inputs:
+            expectedData: '$expectedData'
+
+  - match: '^I create an allergy resource with:$'
+    table:
+      required: [resourceType, codeCode, codeDisplay, codeText, reactionCode, reactionDisplay]
+    actions:
+      - call:
+          path: scriptlets/createAllergy.xml
+          output: 'createdAllergy'
+          inputs:
+            resourceType: '$row.resourceType'
+            codeCode: '$row.codeCode'
+            codeDisplay: '$row.codeDisplay'
+            codeText: '$row.codeText'
+            reactionCode: '$row.reactionCode'
+            reactionDisplay: '$row.reactionDisplay'
+
+  - match: '^I submit the created allergy$'
+    actions:
+      - call:
+          path: scriptlets/submitAllergy.xml
+          output: 'submitResult'
+          inputs:
+            content: '$createdAllergy{content}'
+
+  - match: '^the response status should be "([0-9]{3})"$'
+    actions:
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Verify status code'
+          inputs:
+            actualstring: '$submitResult{status}'
+            expectedstring: '"$1"'
+
+  - match: '^the OperationOutcome at "(.+)" should be "(.+)"$'
+    actions:
+      - process:
+          handler: 'JSONPointerProcessor'
+          operation: 'process'
+          output: 'jsonValue'
+          inputs:
+            content: '$submitResult{payload}'
+            pointer: '"$1"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Verify OperationOutcome value'
+          inputs:
+            actualstring: '$jsonValue'
+            expectedstring: '"$2"'
+
+  - match: '^the resource is correctly uploaded to the server$'
+    actions:
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Verify 201 Created'
+          inputs:
+            actualstring: '$submitResult{status}'
+            expectedstring: '"201"'
+
+  - match: '^the monitor is instructed to review the submission$'
+    actions:
+      - call:
+          path: scriptlets/instructUser.xml
+          inputs:
+            step: '"monitorReview"'
+            message: '"Please review the latest submission and approve or reject."'
+
+  - match: '^the monitor marks the submission as "(Pass|Fail)"$'
+    actions:
+      - process:
+          handler: 'MonitorApprovalProcessor'
+          operation: 'await'
+          output: 'monitorDecision'
+          inputs:
+            timeoutSeconds: '60'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Verify monitor decision'
+          inputs:
+            actualstring: '$monitorDecision'
+            expectedstring: '"$1"'
+  # --- Client submits a resource ---
+  - match: '^the user submits a ([A-Za-z][A-Za-z0-9]*) resource$'
+    actions:
+      # Instruct the tester/client to submit the resource (UI step)
+      - call:
+          path: scriptlets/instructUser.xml
+          inputs:
+            step: '"clientSubmit"'
+            message: '"Please submit a $1 resource now."'
+      # Wait/poll for a client submission (replace handler name with your own)
+      - process:
+          handler: 'ClientSubmissionProcessor'
+          operation: 'await'
+          output: 'submitResult'
+          inputs:
+            timeoutSeconds: '60'
+
+  # --- Optional wait to let server process the resource ---
+  - match: '^the resource is processed$'
+    actions:
+      - process:
+          handler: 'DelayProcessor'
+          operation: 'sleep'
+          inputs:
+            milliseconds: '500'   # adjust or replace with a polling handler
+
+  # --- Validate the submitted content against a profile URL ---
+  - match: '^validate against (https?://.+)$'
+    actions:
+      - process:
+          handler: 'FHIRValidator'
+          operation: 'validate'
+          output: 'validationOutcome'
+          inputs:
+            content: '$submitResult{payload}'
+            profileUrl: '"$1"'
+
+  # --- Inform the user (generic message) ---
+  - match: '^inform the user "(.+)"$'
+    actions:
+      - call:
+          path: scriptlets/instructUser.xml
+          inputs:
+            step: '"informUser"'
+            message: '"$1"'
+
+  # --- Validation status check (success/fail) ---
+  - match: '^the validation should succeed$'
+    actions:
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Validation succeeded'
+          inputs:
+            actualstring: '$validationOutcome{status}'
+            expectedstring: '"success"'
+
+  - match: '^the validation should fail$'
+    actions:
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Validation failed'
+          inputs:
+            actualstring: '$validationOutcome{status}'
+            expectedstring: '"fail"'
