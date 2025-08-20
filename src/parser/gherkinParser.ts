@@ -9,6 +9,7 @@ import {
 
 import { loadCatalog, Catalog, CatalogAction } from './languageCatalog';
 
+
 export type IRAction =
   | { type: 'call', path: string, output?: string, inputs?: Record<string,string> }
   | { type: 'verify', handler: string, desc?: string, inputs: Record<string,string> }
@@ -17,13 +18,20 @@ export type IRAction =
   | { type: 'listAppend', list: string, item: Record<string,string> }
   | { type: 'foreach', from: string, do: IRAction[] };
 
+
+type ServicesMap = Record<string, string>; // { "FHIR-validator": "1.2.0", "Monitor": "2.1.0" }
+
 /** Minimal, self-contained parser + catalog expander */
 export class GherkinParser {
   private catalog?: Catalog;
   private model?: DataModel;
+  private services: ServicesMap;
+  private strictRequirements: boolean;  
 
-  constructor(model?: DataModel) {
+  constructor(model?: DataModel, options?: { services?: ServicesMap; strictRequirements?: boolean }) {
     this.model = model;
+    this.services = options?.services ?? {};
+    this.strictRequirements = options?.strictRequirements ?? false; // warning by default
   }
 
   /** Loads /lang/en.yml once */
@@ -41,12 +49,12 @@ export class GherkinParser {
     let scenarioName = '';
     const steps: Step[] = [];
 
-    const STEP_RE = /^(Given|When|Then|And)\s+(.*)$/i;
+    const STEP_RE = /^(Given|When|Then|And|But)\s+(.*)$/i;
     let i = 0;
     while (i < lines.length) {
       const raw = lines[i];
       const lineNo = i + 1;
-      const line = raw.trim();
+      const line = stripInlineComments(raw).trim();
 
       if (!line) { i++; continue; }
 
@@ -57,8 +65,11 @@ export class GherkinParser {
       }
       
       if (/^Scenario:/i.test(line)) {
+        if (scenarioName) {
+          issues.push({ line: lineNo, severity: 'warning', message: 'Only one Scenario is supported; later scenarios will be ignored.' });
+        }
         scenarioName = line.replace(/^Scenario:\s*/i, '').trim();
-        inFeaturePreamble = false;          // <-- preamble ends
+        inFeaturePreamble = false;
         i++; continue;
       }
 
@@ -78,7 +89,7 @@ export class GherkinParser {
         const tableRows: Record<string,string>[] = [];
         let j = i + 1;
         while (j < lines.length && /^\s*\|.*\|\s*$/.test(lines[j])) {
-          const row = splitRow(lines[j]);
+          const row = splitRow(stripInlineComments(lines[j]));
           if (tableRows.length === 0) {
             // header row
             tableRows.push(Object.fromEntries(row.map((h) => [h, h])));
@@ -105,7 +116,7 @@ export class GherkinParser {
       }
 
       if (/^\s*#/.test(raw)) { i++; continue; }
-      
+
       // Unknown line -> warning
       issues.push({ line: lineNo, severity: 'warning', message: `Unrecognized line: "${line}"` });
       i++;
@@ -144,7 +155,7 @@ export class GherkinParser {
       const m = re.exec(text);
       if (!m) continue;
 
-      // Validate table if required
+      // 1) Table validation (unchanged)
       if (entry.table?.required?.length) {
         if (!step.table || step.table.length === 0) {
           issues.push({ line: step.line, severity: 'error', message: 'Step requires a table' });
@@ -157,19 +168,43 @@ export class GherkinParser {
         }
       }
 
+      // 2) REQUIREMENTS CHECK (NEW)
+      const reqs = Array.isArray(entry.requires) ? entry.requires : (entry.requires ? [entry.requires] : []);
+      for (const req of reqs) {
+        const available = this.services[req.service];
+        const ok = !!available && (!req.version || satisfies(available, req.version));
+        if (!ok) {
+          issues.push({
+            line: step.line,
+            severity: this.strictRequirements ? 'error' : 'warning',
+            message: !available
+              ? `Missing required service "${req.service}" for step "${text}"`
+              : `Service "${req.service}" version ${available} does not satisfy requirement ${req.version}`
+          });
+        }
+      }
+
+      // 3) Expand actions (unchanged)
       const ctx = { groups: m.slice(1), tableRows: step.table || [] };
       const actions = materialize(entry.actions, ctx);
       const label = entry.match.replace(/^\^|\$$/g, '');
       return { actions, mappingLabel: label, issues };
     }
 
-    // no match
     issues.push({ line: step.line, severity: 'error', message: `No mapping for step: "${text}"` });
     return { actions: [], issues };
   }
 
+
+
+  
+
   getStepMapping(text: string): string | null {
-    if (!this.catalog) return null;
+    if (!this.catalog) {
+      // fire & forget; next render will have it
+      this.ensureCatalog('en').catch(() => {});
+      return null;
+    }
     for (const entry of this.catalog.steps) {
       if (new RegExp(entry.match, 'i').test(text.trim())) {
         return entry.match.replace(/^\^|\$$/g, '');
@@ -256,4 +291,41 @@ function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
 
   actions.forEach(visit);
   return out;
+}
+
+/** Semver helpers (very small, supports >=, >, =, <=, < with x.y[.z]) */
+function satisfies(actual: string, requirement: string): boolean {
+  // requirement examples: ">=1.0", ">2.0.1", "1.3.0", "<=2.1"
+  const m = requirement.match(/^\s*(>=|<=|>|<|=)?\s*([0-9]+(?:\.[0-9]+){0,2})\s*$/);
+  if (!m) return false;
+  const op = (m[1] || '>=').trim();
+  const req = m[2];
+  const cmp = compareVersions(normalize(actual), normalize(req));
+  switch (op) {
+    case '>':  return cmp > 0;
+    case '>=': return cmp >= 0;
+    case '<':  return cmp < 0;
+    case '<=': return cmp <= 0;
+    case '=':  return cmp === 0;
+    default:   return cmp >= 0;
+  }
+}
+
+function normalize(v: string): [number, number, number] {
+  const parts = v.split('.').map(n => parseInt(n, 10));
+  return [parts[0] || 0, parts[1] || 0, parts[2] || 0];
+}
+
+function compareVersions(a: [number,number,number], b: [number,number,number]): number {
+  if (a[0] !== b[0]) return a[0] - b[0];
+  if (a[1] !== b[1]) return a[1] - b[1];
+  return a[2] - b[2];
+}
+
+function stripInlineComments(raw: string): string {
+  // removes '#' and everything after, unless inside quotes (kept simple: common case)
+  // If you want strict quote handling later, we can enhance this.
+  const ix = raw.indexOf('#');
+  if (ix === -1) return raw;
+  return raw.slice(0, ix);
 }

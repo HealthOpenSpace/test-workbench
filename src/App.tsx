@@ -36,7 +36,19 @@ function App() {
   });
 
   /** Parser & Generator instances (memoized) */
-  const parser = useMemo(() => new GherkinParser(selectedModel), [selectedModel]);
+  const parser = useMemo(
+    () =>
+      new GherkinParser(selectedModel, {
+        services: {
+          'FHIR-validator': '1.2.0',
+          'Monitor': '2.0.1',
+          'UploadProxy': '1.6.0',
+          'ProxyTrafficProcessor': '1.0.0', // if you expose processors as services
+        },
+        strictRequirements: false, // set true to make missing/insufficient versions hard errors
+      }),
+    [selectedModel]
+  );
   const generator = useMemo(() => new XMLGenerator(parser), [parser]);
 
   /** Parse + expand to IR whenever content (or model) changes */

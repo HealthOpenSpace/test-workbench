@@ -1,6 +1,11 @@
 version: 1
 locale: en
+
+# --------------------------------------------------------------------
+# Core “infrastructure” steps used by both server and client features
+# --------------------------------------------------------------------
 steps:
+  # Setup / Background
   - match: '^the test session is set up with dataset ingestion "(Y|N)" and server api root from SYSTEM$'
     actions:
       - call:
@@ -9,6 +14,9 @@ steps:
             ingestData: '$1'
             serverApiRoot: '$SYSTEM{serverApiRoot}'
 
+  # ------------------------------------------------------------------
+  # SERVER: happy path – Register allergy twice and verify
+  # ------------------------------------------------------------------
   - match: '^I register an allergy with:$'
     table:
       required: [codeCode, codeDisplay, codeText, reactionCode, reactionDisplay]
@@ -22,6 +30,9 @@ steps:
             codeText: '$row.codeText'
             reactionCode: '$row.reactionCode'
             reactionDisplay: '$row.reactionDisplay'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
 
   - match: '^save the returned identifier as "([A-Za-z_][A-Za-z0-9_]*)"$'
     actions:
@@ -49,6 +60,9 @@ steps:
           inputs:
             expectedData: '$expectedData'
 
+  # ------------------------------------------------------------------
+  # SERVER/CLIENT: create + submit + status/OO checks (invalid flow too)
+  # ------------------------------------------------------------------
   - match: '^I create an allergy resource with:$'
     table:
       required: [resourceType, codeCode, codeDisplay, codeText, reactionCode, reactionDisplay]
@@ -63,6 +77,9 @@ steps:
             codeText: '$row.codeText'
             reactionCode: '$row.reactionCode'
             reactionDisplay: '$row.reactionDisplay'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
 
   - match: '^I submit the created allergy$'
     actions:
@@ -76,7 +93,7 @@ steps:
     actions:
       - verify:
           handler: 'StringValidator'
-          desc: 'Verify status code'
+          desc: 'Verify HTTP status'
           inputs:
             actualstring: '$submitResult{status}'
             expectedstring: '"$1"'
@@ -97,6 +114,7 @@ steps:
             actualstring: '$jsonValue'
             expectedstring: '"$2"'
 
+  # Convenience phrase for POST+201 check (your example)
   - match: '^the resource is correctly uploaded to the server$'
     actions:
       - verify:
@@ -106,6 +124,9 @@ steps:
             actualstring: '$submitResult{status}'
             expectedstring: '"201"'
 
+  # ------------------------------------------------------------------
+  # CLIENT / MANUAL FLOWS (GF4, GF5, GF7, GF9)
+  # ------------------------------------------------------------------
   - match: '^the monitor is instructed to review the submission$'
     actions:
       - call:
@@ -117,7 +138,7 @@ steps:
   - match: '^the monitor marks the submission as "(Pass|Fail)"$'
     actions:
       - process:
-          handler: 'MonitorApprovalProcessor'
+          handler: 'MonitorApprovalProcessor'   # rename if your handler differs
           operation: 'await'
           output: 'monitorDecision'
           inputs:
@@ -128,44 +149,8 @@ steps:
           inputs:
             actualstring: '$monitorDecision'
             expectedstring: '"$1"'
-  # --- Client submits a resource ---
-  - match: '^the user submits a ([A-Za-z][A-Za-z0-9]*) resource$'
-    actions:
-      # Instruct the tester/client to submit the resource (UI step)
-      - call:
-          path: scriptlets/instructUser.xml
-          inputs:
-            step: '"clientSubmit"'
-            message: '"Please submit a $1 resource now."'
-      # Wait/poll for a client submission (replace handler name with your own)
-      - process:
-          handler: 'ClientSubmissionProcessor'
-          operation: 'await'
-          output: 'submitResult'
-          inputs:
-            timeoutSeconds: '60'
 
-  # --- Optional wait to let server process the resource ---
-  - match: '^the resource is processed$'
-    actions:
-      - process:
-          handler: 'DelayProcessor'
-          operation: 'sleep'
-          inputs:
-            milliseconds: '500'   # adjust or replace with a polling handler
-
-  # --- Validate the submitted content against a profile URL ---
-  - match: '^validate against (https?://.+)$'
-    actions:
-      - process:
-          handler: 'FHIRValidator'
-          operation: 'validate'
-          output: 'validationOutcome'
-          inputs:
-            content: '$submitResult{payload}'
-            profileUrl: '"$1"'
-
-  # --- Inform the user (generic message) ---
+  # GF4 – Prompt tester (user) to do something (Karate: informUser)
   - match: '^inform the user "(.+)"$'
     actions:
       - call:
@@ -174,21 +159,118 @@ steps:
             step: '"informUser"'
             message: '"$1"'
 
-  # --- Validation status check (success/fail) ---
-  - match: '^the validation should succeed$'
+  # GF5 – Prompt monitor (Karate: informMonitor)
+  - match: '^inform the monitor "(.+)"$'
     actions:
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Validation succeeded'
+      - call:
+          path: scriptlets/instructUser.xml
           inputs:
-            actualstring: '$validationOutcome{status}'
-            expectedstring: '"success"'
+            step: '"informMonitor"'
+            message: '"$1"'
 
-  - match: '^the validation should fail$'
+  # GF7 / GF9 – Poll for monitor validation result (Pass/Fail)
+  - match: '^wait for monitor validation within ([0-9]+) seconds$'
     actions:
+      - process:
+          handler: 'MonitorApprovalProcessor'
+          operation: 'await'
+          output: 'monitorDecision'
+          inputs:
+            timeoutSeconds: '$1'
+
+  # ------------------------------------------------------------------
+  # FHIR VALIDATION (GF1, GF2, GF3)
+  # ------------------------------------------------------------------
+  # GF1 – Validate the last submission payload (or created resource) against a profile URL
+  - match: '^validate against (https?://.+)$'
+    actions:
+      - process:
+          handler: 'FHIRValidator'   # rename to your validator if different
+          operation: 'validate'
+          output: 'validationOutcome'
+          inputs:
+            # Prefer the last submitted payload; fallback to createdAllergy
+            content: '$submitResult{payload}'
+            profileUrl: '"$1"'
+
+  # GF2 – “Simplified” view over OperationOutcome (errors/warnings counts)
+  - match: '^the validation summary should show ([0-9]+) errors? and ([0-9]+) warnings?$'
+    actions:
+      - process:
+          handler: 'ValidationResultsProcessor'  # transforms OO -> {errors,warnings,info}
+          operation: 'summarize'
+          output: 'validationSummary'
+          inputs:
+            outcome: '$validationOutcome'
       - verify:
           handler: 'StringValidator'
-          desc: 'Validation failed'
+          desc: 'Errors count'
           inputs:
-            actualstring: '$validationOutcome{status}'
-            expectedstring: '"fail"'
+            actualstring: '$validationSummary{errors}'
+            expectedstring: '"$1"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Warnings count'
+          inputs:
+            actualstring: '$validationSummary{warnings}'
+            expectedstring: '"$2"'
+
+  # GF3 – FHIRPath evaluation against last payload
+  - match: '^evaluate FHIRPath "(.+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - process:
+          handler: 'FHIRPathProcessor'
+          operation: 'evaluate'
+          output: '$2'
+          inputs:
+            content: '$submitResult{payload}'
+            expression: '"$1"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+      
+  # ------------------------------------------------------------------
+  # PROXY TRAFFIC / POLLING (GF8)
+  # ------------------------------------------------------------------
+  # Get baseline traffic count
+  - match: '^capture initial traffic count$'
+    actions:
+      - process:
+          handler: 'ProxyTrafficProcessor'
+          operation: 'baseline'
+          output: 'initialFlowsLength'
+          inputs: {}
+
+  # Wait for a request (methods list + contains string filter or FHIRPath list)
+  - match: '^wait for a new request with methods "(.+)" and filter "(.+)" within ([0-9]+) seconds every ([0-9]+) seconds$'
+    actions:
+      - process:
+          handler: 'ProxyTrafficProcessor'
+          operation: 'waitForRequest'
+          output: 'newResponse'
+          inputs:
+            baselineCount: '$initialFlowsLength'
+            timeoutSeconds: '$3'
+            pollingIntervalSeconds: '$4'
+            methods: '"$1"'
+            filter: '"$2"'
+
+  # ------------------------------------------------------------------
+  # FILE/UPLOAD POLLING (GF6)
+  # ------------------------------------------------------------------
+  - match: '^wait for upload submission with id "([^"]+)" within ([0-9]+) seconds every ([0-9]+) seconds$'
+    actions:
+      - process:
+          handler: 'UploadSubmissionProcessor'
+          operation: 'await'
+          output: 'uploadResponse'
+          inputs:
+            submissionId: '"$1"'
+            timeoutSeconds: '$2'
+            pollingIntervalSeconds: '$3'
+      - verify:
+          handler: 'NullCheck'
+          desc: 'Upload response exists'
+          inputs:
+            actualstring: '$uploadResponse{filename}'
+            expectedstring: '"not-null"'

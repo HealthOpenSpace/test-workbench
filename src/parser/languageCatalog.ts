@@ -27,3 +27,18 @@ export async function loadCatalog(locale = 'en'): Promise<Catalog> {
   const text = await res.text();
   return yaml.load(text) as Catalog;
 }
+
+
+// languageCatalog.ts
+export interface CatalogRequirement {
+    service: string;         // e.g. "FHIR-validator"
+    version?: string;        // e.g. ">=1.0"
+  }
+  
+  export interface CatalogStep {
+    match: string;
+    table?: { required: string[] };
+    actions: CatalogAction[];
+    requires?: CatalogRequirement | CatalogRequirement[]; // ⬅️ NEW
+  }
+  
