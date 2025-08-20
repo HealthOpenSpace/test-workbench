@@ -1,4 +1,5 @@
 import yaml from 'js-yaml';
+import type { Catalog } from './types';
 
 // If you prefer dynamic locale switching, make the path configurable.
 export type CatalogAction =
@@ -22,12 +23,19 @@ export interface Catalog {
 }
 
 export async function loadCatalog(locale = 'en'): Promise<Catalog> {
-  // Served statically by Vite from /public (so put the file in /public/lang/en.yml)
-  const res = await fetch(`/lang/${locale}.yml`);
-  const text = await res.text();
-  return yaml.load(text) as Catalog;
-}
-
+    // BASE_URL is "/" locally, "/test-workbench/" on GitHub Pages
+    const base = import.meta.env.BASE_URL || '/';
+    const url = `${base}lang/${locale}.yml`;
+  
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Failed to load catalog: ${url} (${res.status})`);
+    }
+  
+    const text = await res.text();
+    return yaml.load(text) as Catalog;
+  }
+  
 
 // languageCatalog.ts
 export interface CatalogRequirement {
