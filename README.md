@@ -109,4 +109,5 @@ Output XML:
 
 ## 📜 License
 
-MIT (or your license here)
+Creative Commons
+
