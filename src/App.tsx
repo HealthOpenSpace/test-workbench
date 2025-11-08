@@ -41,6 +41,7 @@ function App() {
       new GherkinParser(selectedModel, {
         services: {
           'FHIR-validator': '1.2.0',
+          'HCERT-validator': '1.0.0',          
           'Monitor': '2.0.1',
           'UploadProxy': '1.6.0',
           'ProxyTrafficProcessor': '1.0.0', // if you expose processors as services

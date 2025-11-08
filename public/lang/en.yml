@@ -2,7 +2,7 @@ version: 1
 locale: en
 
 # --------------------------------------------------------------------
-# Core “infrastructure” steps used by both server and client features
+# Core "infrastructure" steps used by both server and client features
 # --------------------------------------------------------------------
 steps:
   # Setup / Background
@@ -69,7 +69,7 @@ steps:
     actions:
       - call:
           path: scriptlets/createAllergy.xml
-          output: 'createdAllergy'
+          output: createdAllergy
           inputs:
             resourceType: '$row.resourceType'
             codeCode: '$row.codeCode'
@@ -134,11 +134,17 @@ steps:
           inputs:
             step: '"monitorReview"'
             message: '"Please review the latest submission and approve or reject."'
+      - process:
+          handler: MonitorApprovalProcessor
+          operation: await
+          output: monitorDecision
+          inputs:
+            timeoutSeconds: '60'
 
   - match: '^the monitor marks the submission as "(Pass|Fail)"$'
     actions:
       - process:
-          handler: 'MonitorApprovalProcessor'   # rename if your handler differs
+          handler: 'MonitorApprovalProcessor'
           operation: 'await'
           output: 'monitorDecision'
           inputs:
@@ -185,19 +191,18 @@ steps:
   - match: '^validate against (https?://.+)$'
     actions:
       - process:
-          handler: 'FHIRValidator'   # rename to your validator if different
+          handler: 'FHIRValidator'
           operation: 'validate'
           output: 'validationOutcome'
           inputs:
-            # Prefer the last submitted payload; fallback to createdAllergy
             content: '$submitResult{payload}'
             profileUrl: '"$1"'
 
-  # GF2 – “Simplified” view over OperationOutcome (errors/warnings counts)
+  # GF2 – "Simplified" view over OperationOutcome (errors/warnings counts)
   - match: '^the validation summary should show ([0-9]+) errors? and ([0-9]+) warnings?$'
     actions:
       - process:
-          handler: 'ValidationResultsProcessor'  # transforms OO -> {errors,warnings,info}
+          handler: 'ValidationResultsProcessor'
           operation: 'summarize'
           output: 'validationSummary'
           inputs:
@@ -219,16 +224,16 @@ steps:
   - match: '^evaluate FHIRPath "(.+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
     actions:
       - process:
-          handler: 'FHIRPathProcessor'
-          operation: 'evaluate'
-          output: '$2'
+          handler: FHIRPathProcessor
+          operation: evaluate
+          output: codes
           inputs:
             content: '$submitResult{payload}'
             expression: '"$1"'
     requires:
       service: FHIR-validator
       version: ">=1.0"
-      
+
   # ------------------------------------------------------------------
   # PROXY TRAFFIC / POLLING (GF8)
   # ------------------------------------------------------------------
@@ -274,3 +279,325 @@ steps:
           inputs:
             actualstring: '$uploadResponse{filename}'
             expectedstring: '"not-null"'
+
+  # ------------------------------------------------------------------
+  # HCERT QR CODE AND CWT VALIDATION
+  # ------------------------------------------------------------------
+  
+  # Setup steps for HCERT testing
+  - match: '^a Receiver is presented a QR Code$'
+    actions:
+      - assign:
+          to: 'receiverRole'
+          value: '"active"'
+
+  - match: '^the QR code uses a format as defined in \(ISO/IEC 18004:2015\)$'
+    actions:
+      - assign:
+          to: 'qrFormat'
+          value: '"ISO18004"'
+
+  - match: '^the QR code uses Alphanumeric mode \(Mode 2\) encoding$'
+    actions:
+      - assign:
+          to: 'qrMode'
+          value: '"alphanumeric"'
+
+  - match: '^the QR code uses Base45 encoding$'
+    actions:
+      - assign:
+          to: 'qrEncoding'
+          value: '"base45"'
+
+  # QR Code scanning and decoding
+  - match: '^the Receiver scans the QR Code$'
+    actions:
+      - call:
+          path: 'scriptlets/instructUser.xml'
+          inputs:
+            message: '"Please provide a QR code image for scanning"'
+      - process:
+          handler: 'HCERTProcessor'
+          operation: 'decodeImage'
+          output: 'qrDecodeResult'
+          inputs:
+            image: '$userProvidedImage'
+    requires:
+      service: HCERT-validator
+      version: ">=1.0"
+
+  # QR Code validation results
+  - match: '^the QR code is successfully decoded$'
+    actions:
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Verify QR decode success'
+          inputs:
+            actualstring: '$qrDecodeResult{decoded}'
+            expectedstring: '"true"'
+
+  - match: '^the decoded raw Alphanumeric string starts with "HC1:" prefix$'
+    actions:
+      - process:
+          handler: 'StringProcessor'
+          operation: 'startsWith'
+          output: 'hasHC1Prefix'
+          inputs:
+            text: '$qrDecodeResult{raw_data}'
+            prefix: '"HC1:"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Verify HC1 prefix'
+          inputs:
+            actualstring: '$hasHC1Prefix'
+            expectedstring: '"true"'
+
+  - match: '^the decoded raw Alphanumeric string does not start with "HC1:" prefix$'
+    actions:
+      - process:
+          handler: 'StringProcessor'
+          operation: 'startsWith'
+          output: 'hasHC1Prefix'
+          inputs:
+            text: '$qrDecodeResult{raw_data}'
+            prefix: '"HC1:"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Verify no HC1 prefix'
+          inputs:
+            actualstring: '$hasHC1Prefix'
+            expectedstring: '"false"'
+
+  - match: '^the QR Code is rejected with an Error$'
+    actions:
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Verify error present'
+          inputs:
+            actualstring: '$qrDecodeResult{error}'
+            expectedstring: '"decode_failed"'
+
+  # HCERT string decoding
+  - match: '^Receiver decodes the raw Alphanumeric string from QR Code$'
+    actions:
+      - process:
+          handler: 'HCERTProcessor'
+          operation: 'decodeHCERT'
+          output: 'hcertDecoded'
+          inputs:
+            qr_data: '$qrDecodeResult{raw_data}'
+    requires:
+      service: HCERT-validator
+      version: ">=1.0"
+
+  - match: '^removes the "HC1:" prefix$'
+    actions:
+      - process:
+          handler: 'StringProcessor'
+          operation: 'removePrefix'
+          output: 'withoutPrefix'
+          inputs:
+            text: '$qrDecodeResult{raw_data}'
+            prefix: '"HC1:"'
+
+  # Base45 and ZLIB processing
+  - match: '^the remaining Alphanumeric string can be Base45 decoded to retrieve a binary payload$'
+    actions:
+      - verify:
+          handler: 'NumberValidator'
+          desc: 'Verify Base45 decode successful'
+          inputs:
+            actualnumber: '$hcertDecoded{diagnostics}{base45_decoded_len}'
+            expectednumber: '0'
+            operation: 'greater_than'
+
+  - match: '^ZLIB decompression can be applied to the binary payload$'
+    actions:
+      - verify:
+          handler: 'NumberValidator'
+          desc: 'Verify ZLIB decompression successful'
+          inputs:
+            actualnumber: '$hcertDecoded{diagnostics}{zlib_decompressed_len}'
+            expectednumber: '0'
+            operation: 'greater_than'
+
+  # CWT validation
+  - match: '^the retrieved Payload is a valid CBOR Web Token \(CWT\) as defined \[here\]\((.+)\)$'
+    actions:
+      - verify:
+          handler: 'StructureValidator'
+          desc: 'Validate CWT structure'
+          inputs:
+            content: '$hcertDecoded{payload}'
+            profileUrl: '"$1"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^a valid CBOR CWT token is decoded from a QR Code$'
+    actions:
+      - assign:
+          to: 'validCWT'
+          value: '$hcertDecoded{payload}'
+
+  - match: '^THE CWT is parsed$'
+    actions:
+      - process:
+          handler: 'HCERTProcessor'
+          operation: 'extractMetadata'
+          output: 'cwtMetadata'
+          inputs:
+            cose: '$hcertDecoded{cose}'
+            payload: '$hcertDecoded{payload}'
+
+  - match: '^CWT structure validates against the StructureDefinition as defined \[here\]\((.+)\)$'
+    actions:
+      - verify:
+          handler: 'StructureValidator'
+          desc: 'Validate against CWT StructureDefinition'
+          inputs:
+            content: '$validCWT'
+            profileUrl: '"$1"'
+
+  # Algorithm validation
+  - match: '^a valid CWT$'
+    actions:
+      - assign:
+          to: 'cwtForValidation'
+          value: '$hcertDecoded{payload}'
+
+  - match: '^the Receiver validates the algorithm i\.e\. Claim ''1'' in the Header$'
+    actions:
+      - process:
+          handler: 'JSONPointerProcessor'
+          operation: 'process'
+          output: 'algorithmClaim'
+          inputs:
+            content: '$hcertDecoded{cose}{protected}'
+            pointer: '"/1"'
+
+  - match: '^the algorithm is be one of the supported types:$'
+    table:
+      required: [Algorithm, COSE Parameter, SOG-IT Level]
+    actions:
+      - foreach:
+          from: '$tableRows'
+          do:
+            - process:
+                handler: 'AlgorithmValidator'
+                operation: 'validateSupported'
+                output: 'algorithmValid'
+                inputs:
+                  algorithm: '$algorithmClaim'
+                  supportedAlgorithms: '$row.Algorithm'
+
+  # Key identifier validation  
+  - match: '^a valid CWT Structure$'
+    actions:
+      - assign:
+          to: 'cwtStructure'
+          value: '$hcertDecoded'
+
+  - match: '^the Receiver extracts the Key Identifier i\.e\. Claim ''4'' in the Header$'
+    actions:
+      - process:
+          handler: 'JSONPointerProcessor'
+          operation: 'process'
+          output: 'keyIdentifier'
+          inputs:
+            content: '$hcertDecoded{cose}{protected}'
+            pointer: '"/4"'
+
+  - match: '^extracts the Issuer i\.e\. Claim ''1'' from the Payload$'
+    actions:
+      - process:
+          handler: 'JSONPointerProcessor'
+          operation: 'process'
+          output: 'issuerClaim'
+          inputs:
+            content: '$hcertDecoded{payload}'
+            pointer: '"/1"'
+
+  - match: '^the extracted Key Id is 8 bytes$'
+    actions:
+      - verify:
+          handler: 'KeyValidator'
+          desc: 'Verify Key ID is 8 bytes'
+          inputs:
+            keyId: '$keyIdentifier'
+            expectedLength: '8'
+
+  - match: '^the extracted issuer is ISO 3166-1 alpha-2 Country Code$'
+    actions:
+      - verify:
+          handler: 'CountryCodeValidator'
+          desc: 'Verify issuer is valid country code'
+          inputs:
+            countryCode: '$issuerClaim'
+            standard: '"ISO3166-1-alpha-2"'
+
+  - match: '^the public key can be retrieved from the trust network using the Country Code and Key Id$'
+    actions:
+      - process:
+          handler: 'TrustNetworkProcessor'
+          operation: 'retrievePublicKey'
+          output: 'publicKey'
+          inputs:
+            countryCode: '$issuerClaim'
+            keyId: '$keyIdentifier'
+
+  # Signature validation
+  - match: '^the Receiver extracts the public key of the issuer from the trust network that matches the Key Id in the COSE Header$'
+    actions:
+      - assign:
+          to: 'matchedPublicKey'
+          value: '$publicKey'
+
+  - match: '^the payload has not expired i\.e\. current time is between Issued at \(Claim ''6''\) and  Expiration Date \(Claim ''4''\)$'
+    actions:
+      - process:
+          handler: 'TimeValidator'
+          operation: 'validateTimeRange'
+          output: 'timeValid'
+          inputs:
+            issuedAt: '$hcertDecoded{payload}{6}'
+            expirationDate: '$hcertDecoded{payload}{4}'
+
+  - match: '^the signature is cryptographically valid$'
+    actions:
+      - verify:
+          handler: 'SignatureValidator'
+          desc: 'Verify cryptographic signature'
+          inputs:
+            signature: '$hcertDecoded{cose}{signature}'
+            publicKey: '$matchedPublicKey'
+            payload: '$hcertDecoded{payload}'
+
+  # HCERT payload extraction
+  - match: '^a CWT with verified signature$'
+    actions:
+      - assign:
+          to: 'verifiedCWT'
+          value: '$hcertDecoded'
+
+  - match: '^the Receiver extracts the HCERT Payload using claim key -260$'
+    actions:
+      - process:
+          handler: 'JSONPointerProcessor'
+          operation: 'process'
+          output: 'hcertPayload'
+          inputs:
+            content: '$verifiedCWT{payload}'
+            pointer: '"/-260"'
+
+  - match: '^the extracted HCERT structure validates against the StructureDefinition as defined \[here\]\((.+)\)$'
+    actions:
+      - verify:
+          handler: 'StructureValidator'
+          desc: 'Validate HCERT structure'
+          inputs:
+            content: '$hcertPayload'
+            profileUrl: '"$1"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
