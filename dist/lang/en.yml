@@ -9,65 +9,18 @@ steps:
   # ACTOR DECLARATIONS
   # ------------------------------------------------------------------
 
-  # Declare the system under test (bare)
+  # Declare the system under test
   - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test$'
     actions:
       - declareActor:
           id: '$1'
           role: 'SUT'
 
-  # Declare the SUT with endpoint URL
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test on (https?://\S+)$'
-    actions:
-      - declareActor:
-          id: '$1'
-          role: 'SUT'
-          endpoint: '$2'
-
-  # Declare the SUT with canonical definition
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test as defined by (https?://\S+)$'
-    actions:
-      - declareActor:
-          id: '$1'
-          role: 'SUT'
-          canonical: '$2'
-
-  # Declare the SUT with endpoint URL and canonical definition
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test on (https?://\S+) as defined by (https?://\S+)$'
-    actions:
-      - declareActor:
-          id: '$1'
-          role: 'SUT'
-          endpoint: '$2'
-          canonical: '$3'
-
-  # Declare an available service/actor (bare)
+  # Declare an available service/actor
   - match: '^([A-Za-z][A-Za-z0-9_]*) is available$'
     actions:
       - declareActor:
           id: '$1'
-
-  # Declare an actor with endpoint URL
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is available on (https?://\S+)$'
-    actions:
-      - declareActor:
-          id: '$1'
-          endpoint: '$2'
-
-  # Declare an actor with canonical definition
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is available as defined by (https?://\S+)$'
-    actions:
-      - declareActor:
-          id: '$1'
-          canonical: '$2'
-
-  # Declare an actor with endpoint URL and canonical definition
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is available on (https?://\S+) as defined by (https?://\S+)$'
-    actions:
-      - declareActor:
-          id: '$1'
-          endpoint: '$2'
-          canonical: '$3'
 
   # Declare an actor with a descriptive name
   - match: '^([A-Za-z][A-Za-z0-9_]*) is available as "([^"]+)"$'
