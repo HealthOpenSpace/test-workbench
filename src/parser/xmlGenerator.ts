@@ -5,7 +5,7 @@ import type { IRAction } from './gherkinParser';
 export interface GeneratedFile {
   filename: string;
   xml: string;
-  type: 'testsuite' | 'testcase';
+  type: 'testsuite' | 'testcase' | 'scriptlet';
   id: string;
   name: string;
 }
@@ -36,8 +36,10 @@ export class XMLGenerator {
     for (const sc of scenarios) {
       const testcaseId = toId(sc.name);
       const actors = collectActors(sc.ir);
+      const variables = collectVariables(sc.ir);
       const stepsXml = emitIR(sc.ir);
       const actorsXml = emitActors(actors);
+      const variablesXml = emitVariables(variables);
 
       const testcaseXml = `<?xml version="1.0" encoding="UTF-8"?>
 <testcase id="${escapeAttr(testcaseId)}"
@@ -52,7 +54,7 @@ export class XMLGenerator {
   <actors>
 ${indent(actorsXml, 4)}
   </actors>
-
+${variablesXml ? `\n  <variables>\n${indent(variablesXml, 4)}\n  </variables>\n` : ''}
   <steps stopOnError="true">
 ${indent(stepsXml || '<!-- no steps generated for this scenario -->', 4)}
   </steps>
@@ -90,7 +92,7 @@ ${indent(stepsXml || '<!-- no steps generated for this scenario -->', 4)}
         if (!allActors.has(a.id)) allActors.set(a.id, { name: a.name, role: a.role, endpoint: a.endpoint, canonical: a.canonical });
       }
     }
-    const suiteActorsXml = emitActors([...allActors.entries()].map(([id, v]) => ({ id, ...v })));
+    const suiteActorsXml = emitSuiteActors([...allActors.entries()].map(([id, v]) => ({ id, ...v })));
 
     const testsuiteXml = `<?xml version="1.0" encoding="UTF-8"?>
 <testsuite id="${escapeAttr(suiteId)}"
@@ -118,6 +120,10 @@ ${testcaseRefs}
       name: featureTitle
     });
 
+    // Generate scriptlet stubs for all <call path="scriptlets/..."> references
+    const scriptletFiles = generateScriptlets(scenarios);
+    files.push(...scriptletFiles);
+
     // Combined preview: test suite + all test cases separated by comments
     const combinedXml = files.map(f =>
       `<!-- ===== ${f.type}: ${f.filename} ===== -->\n${f.xml}`
@@ -126,7 +132,8 @@ ${testcaseRefs}
     return {
       testcaseName: featureTitle,
       xml: combinedXml,
-      files
+      files,
+      scriptletCount: scriptletFiles.length,
     };
   }
 }
@@ -137,6 +144,94 @@ interface DeclaredActor {
   role?: string;
   endpoint?: string;
   canonical?: string;
+}
+
+interface DeclaredVariable {
+  name: string;
+  varType: string;
+  value?: string;
+}
+
+function collectVariables(ir: IRAction[]): DeclaredVariable[] {
+  const vars: DeclaredVariable[] = [];
+  const seen = new Set<string>();
+
+  // 1. Explicitly declared variables
+  for (const a of ir) {
+    if (a.type === 'declareVariable' && !seen.has(a.name)) {
+      seen.add(a.name);
+      vars.push({ name: a.name, varType: a.varType, value: a.value });
+    }
+  }
+
+  // 2. Variables created by <process output="varName"> — ITB requires pre-declaration
+  for (const a of ir) {
+    if (a.type === 'process' && a.output && !seen.has(a.output)) {
+      seen.add(a.output);
+      vars.push({ name: a.output, varType: 'string' });
+    }
+  }
+
+  // 3. Variables created by <send id="xxx"> — the id becomes a referenceable variable
+  for (const a of ir) {
+    if (a.type === 'send' && a.id && !seen.has(a.id)) {
+      seen.add(a.id);
+      vars.push({ name: a.id, varType: 'map' });
+    }
+  }
+
+  // 4a. Variables created by <assign to="varName{prop}"> — base variable is a map
+  for (const a of ir) {
+    if (a.type === 'assign' && a.to && a.to.includes('{')) {
+      const baseName = a.to.split('{')[0];
+      if (baseName && !seen.has(baseName)) {
+        seen.add(baseName);
+        vars.push({ name: baseName, varType: 'map' });
+      }
+    }
+  }
+
+  // 4b. Variables created by <assign to="varName" append="true"> — variable is a list
+  for (const a of ir) {
+    if (a.type === 'assign' && a.to && !a.to.includes('{') && a.append && !seen.has(a.to)) {
+      seen.add(a.to);
+      vars.push({ name: a.to, varType: 'list[map]' });
+    }
+  }
+
+  // 4c. Other top-level assigns — plain string variables
+  for (const a of ir) {
+    if (a.type === 'assign' && a.to && !a.to.includes('{') && !a.append && !seen.has(a.to)) {
+      seen.add(a.to);
+      vars.push({ name: a.to, varType: 'string' });
+    }
+  }
+
+  // 5. Variables created by <interact> requests
+  for (const a of ir) {
+    if (a.type === 'interact' && a.requests) {
+      for (const req of a.requests) {
+        // Variable may be "$rawQRData" or "rawQRData" — normalise to bare name
+        const varName = req.variable?.replace(/^\$/, '');
+        if (varName && !seen.has(varName)) {
+          seen.add(varName);
+          vars.push({ name: varName, varType: 'string' });
+        }
+      }
+    }
+  }
+
+  return vars;
+}
+
+function emitVariables(vars: DeclaredVariable[]): string {
+  if (vars.length === 0) return '';
+  return vars.map(v => {
+    if (v.value != null) {
+      return `<var name="${escapeAttr(v.name)}" type="${escapeAttr(v.varType)}">\n  <value>${escapeXml(v.value)}</value>\n</var>`;
+    }
+    return `<var name="${escapeAttr(v.name)}" type="${escapeAttr(v.varType)}"/>`;
+  }).join('\n');
 }
 
 function collectActors(ir: IRAction[]): DeclaredActor[] {
@@ -150,22 +245,35 @@ function collectActors(ir: IRAction[]): DeclaredActor[] {
   }
   // If no actors were declared, use defaults
   if (actors.length === 0) {
-    actors.push({ id: 'client', role: 'SUT' });
-    actors.push({ id: 'server' });
+    actors.push({ id: 'Client', role: 'SUT' });
+    actors.push({ id: 'FHIRServer' });
   }
   return actors;
 }
 
+/**
+ * Emit actor elements for a test case.
+ * In TDL, test case actors are simple references: <actor id="..." role="..."/>
+ * The role attribute is only "SUT" or "SIMULATED" (not custom strings).
+ */
 function emitActors(actors: DeclaredActor[]): string {
   return actors.map(a => {
-    const roleAttr = a.role ? ` role="${escapeAttr(a.role)}"` : '';
-    const endpointAttr = a.endpoint ? ` endpoint="${escapeAttr(a.endpoint)}"` : '';
-    const canonicalAttr = a.canonical ? ` canonical="${escapeAttr(a.canonical)}"` : '';
-    const attrs = `${roleAttr}${endpointAttr}${canonicalAttr}`;
-    if (a.name) {
-      return `<gitb:actor id="${escapeAttr(a.id)}"${attrs}>\n  <gitb:name>${escapeXml(a.name)}</gitb:name>\n</gitb:actor>`;
-    }
-    return `<gitb:actor id="${escapeAttr(a.id)}"${attrs}/>`;
+    // Test case actors are simple references — endpoint config belongs in the test suite
+    const roleAttr = a.role === 'SUT' ? ' role="SUT"' : '';
+    return `<gitb:actor id="${escapeAttr(a.id)}"${roleAttr}/>`;
+  }).join('\n');
+}
+
+/**
+ * Emit actor elements for a test suite.
+ */
+function emitSuiteActors(actors: DeclaredActor[]): string {
+  return actors.map(a => {
+    const name = a.name || a.id;
+    const desc = a.endpoint
+      ? `Endpoint: ${a.endpoint}${a.canonical ? ' | Definition: ' + a.canonical : ''}`
+      : (a.canonical ? `Definition: ${a.canonical}` : '');
+    return `<gitb:actor id="${escapeAttr(a.id)}">\n  <gitb:name>${escapeXml(name)}</gitb:name>${desc ? `\n  <gitb:desc>${escapeXml(desc)}</gitb:desc>` : ''}\n</gitb:actor>`;
   }).join('\n');
 }
 
@@ -175,10 +283,20 @@ function emitIR(ir: IRAction[]): string {
     if (a.type === 'declareActor') {
       // Actor declarations are handled separately in <actors> section
       continue;
-    } else if (a.type === 'call') {
+    } else if (a.type === 'send') {
+      const idAttr = a.id ? ` id="${escapeAttr(a.id)}"` : '';
+      const descAttr = a.desc ? ` desc="${escapeAttr(a.desc)}"` : '';
       const fromAttr = a.from ? ` from="${escapeAttr(a.from)}"` : '';
       const toAttr = a.to ? ` to="${escapeAttr(a.to)}"` : '';
-      out.push(`<call path="${escapeAttr(a.path)}"${a.output ? ` output="${escapeAttr(a.output)}"` : ''}${fromAttr}${toAttr}>`);
+      out.push(`<send${idAttr}${descAttr} handler="${escapeAttr(a.handler)}"${fromAttr}${toAttr}>`);
+      out.push(...emitInputs(a.inputs));
+      out.push(`</send>`);
+    } else if (a.type === 'log') {
+      out.push(`<log>${escapeXml(a.value)}</log>`);
+    } else if (a.type === 'call') {
+      out.push(`<call path="${escapeAttr(a.path)}"${a.output ? ` output="${escapeAttr(a.output)}"` : ''}>`);
+      if (a.from) out.push(`  <input name="from">${escapeXml(a.from)}</input>`);
+      if (a.to) out.push(`  <input name="to">${escapeXml(a.to)}</input>`);
       out.push(...emitInputs(a.inputs));
       out.push(`</call>`);
     } else if (a.type === 'verify') {
@@ -186,19 +304,39 @@ function emitIR(ir: IRAction[]): string {
       out.push(...emitInputs(a.inputs));
       out.push(`</verify>`);
     } else if (a.type === 'process') {
-      const fromAttr = a.from ? ` from="${escapeAttr(a.from)}"` : '';
-      const toAttr = a.to ? ` to="${escapeAttr(a.to)}"` : '';
       out.push(
-        `<process handler="${escapeAttr(a.handler)}" operation="${escapeAttr(a.operation)}"${a.output ? ` output="${escapeAttr(a.output)}"` : ''}${fromAttr}${toAttr}${a.hidden ? ` hidden="true"` : ''}>`
+        `<process handler="${escapeAttr(a.handler)}" operation="${escapeAttr(a.operation)}"${a.output ? ` output="${escapeAttr(a.output)}"` : ''}${a.hidden ? ` hidden="true"` : ''}>`
       );
+      if (a.from) out.push(`  <input name="from">${escapeXml(a.from)}</input>`);
+      if (a.to) out.push(`  <input name="to">${escapeXml(a.to)}</input>`);
       out.push(...emitInputs(a.inputs));
       out.push(`</process>`);
     } else if (a.type === 'assign') {
-      out.push(`<assign to="${escapeAttr(a.to)}">${escapeXml(a.value)}</assign>`);
+      // Skip empty-list initializations — TDL creates lists implicitly on first append
+      if (a.value === '[]' || a.value === '') continue;
+      const appendAttr = a.append ? ' append="true"' : '';
+      out.push(`<assign to="${escapeAttr(a.to)}"${appendAttr}>${escapeXml(a.value)}</assign>`);
     } else if (a.type === 'listAppend') {
+      // TDL assign values are expressions — use single-quoted string to avoid quote conflicts
+      const jsonStr = JSON.stringify(a.item).replace(/'/g, "\\'");
       out.push(
-        `<assign to="${escapeAttr(a.list)}" append="true">${escapeXml(JSON.stringify(a.item))}</assign>`
+        `<assign to="${escapeAttr(a.list)}" append="true">'${escapeXml(jsonStr)}'</assign>`
       );
+    } else if (a.type === 'declareVariable') {
+      // Variable declarations are handled in <variables> section, not in <steps>
+      continue;
+    } else if (a.type === 'interact') {
+      const idAttr = a.id ? ` id="${escapeAttr(a.id)}"` : '';
+      const descAttr = a.desc ? ` desc="${escapeAttr(a.desc)}"` : '';
+      const titleAttr = a.inputTitle ? ` inputTitle="${escapeAttr(a.inputTitle)}"` : '';
+      out.push(`<interact${idAttr}${descAttr}${titleAttr}>`);
+      for (const req of a.requests) {
+        const nameAttr = req.name ? ` name="${escapeAttr(req.name)}"` : '';
+        const typeAttr = req.inputType ? ` inputType="${escapeAttr(req.inputType)}"` : '';
+        const reqAttr = req.required != null ? ` required="${req.required}"` : '';
+        out.push(`  <request desc="${escapeAttr(req.desc)}"${nameAttr}${typeAttr}${reqAttr}>${escapeXml(req.variable)}</request>`);
+      }
+      out.push(`</interact>`);
     }
   }
   return out.join('\n');
@@ -207,8 +345,146 @@ function emitIR(ir: IRAction[]): string {
 function emitInputs(inputs?: Record<string, string>): string[] {
   if (!inputs) return [];
   return Object.entries(inputs).map(
-    ([k, v]) => `  <input name="${escapeAttr(k)}">${escapeXml(v)}</input>`
+    ([k, v]) => `  <input name="${escapeAttr(k)}">${escapeXml(quoteIfLiteral(v))}</input>`
   );
+}
+
+/**
+ * Wrap a value in double quotes if it looks like a plain-text literal
+ * rather than a TDL expression or variable reference.
+ * Values starting with $ or " are already expressions/quoted.
+ * Pure identifiers (letters, digits, underscores) and numbers are kept bare.
+ *
+ * Special handling for strings containing embedded double quotes (e.g. JSON):
+ * - No $var refs → wrap in single quotes: '{"key":"value"}'
+ * - With $var refs → build concat(): concat('{"key":"', $var, '"}')
+ */
+function quoteIfLiteral(v: string): string {
+  if (!v) return v;
+  // Already quoted or an expression/variable reference
+  if (v.startsWith('"') || v.startsWith("'") || v.startsWith('$')) return v;
+  // Function call expression (concat, contains, etc.) — don't quote
+  if (/^[a-zA-Z_]\w*\s*\(/.test(v)) return v;
+  // Pure number
+  if (/^[0-9]+(\.[0-9]+)?$/.test(v)) return v;
+  // Pure identifier (actor name, variable name, etc.)
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(v)) return v;
+  // Boolean-like
+  if (v === 'true' || v === 'false') return v;
+
+  // If the string contains embedded double quotes (JSON bodies, etc.)
+  // we can't wrap in double quotes — use single quotes or concat()
+  if (v.includes('"')) {
+    const hasVarRefs = /\$[a-zA-Z_]\w*(?:\{[^}]*\})*/.test(v);
+    if (!hasVarRefs) {
+      // Pure literal with double quotes — single-quote wrap
+      return `'${v}'`;
+    }
+    // Has $variable references — build concat() so TDL resolves them
+    return buildConcatExpression(v);
+  }
+
+  // Otherwise it's a literal that needs quoting
+  return `"${v}"`;
+}
+
+/**
+ * Build a TDL concat() expression from a string containing $variable references.
+ * e.g. {"qr_data":"$rawQRData","include_raw":true}
+ *   → concat('{"qr_data":"', $rawQRData, '","include_raw":true}')
+ */
+function buildConcatExpression(v: string): string {
+  const parts: string[] = [];
+  // Match $varName or $varName{prop} or $varName{prop}{nested}
+  const regex = /(\$[a-zA-Z_]\w*(?:\{[^}]*\})*)/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(v)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(`'${v.substring(lastIndex, match.index)}'`);
+    }
+    parts.push(match[1]); // variable reference bare
+    lastIndex = regex.lastIndex;
+  }
+  if (lastIndex < v.length) {
+    parts.push(`'${v.substring(lastIndex)}'`);
+  }
+
+  if (parts.length === 1) return parts[0];
+  return `concat(${parts.join(', ')})`;
+}
+
+/**
+ * Collect all unique scriptlet call paths and their input names from IR actions.
+ */
+function collectScriptletCalls(ir: IRAction[]): Map<string, Set<string>> {
+  const calls = new Map<string, Set<string>>();
+  for (const a of ir) {
+    if (a.type === 'call' && a.path.startsWith('scriptlets/')) {
+      const existing = calls.get(a.path) || new Set<string>();
+      if (a.from) existing.add('from');
+      if (a.to) existing.add('to');
+      if (a.inputs) {
+        for (const k of Object.keys(a.inputs)) existing.add(k);
+      }
+      calls.set(a.path, existing);
+    }
+    if (a.type === 'foreach' && a.do) {
+      for (const [path, inputs] of collectScriptletCalls(a.do)) {
+        const existing = calls.get(path) || new Set<string>();
+        for (const k of inputs) existing.add(k);
+        calls.set(path, existing);
+      }
+    }
+  }
+  return calls;
+}
+
+/**
+ * Generate stub scriptlet XML files for all referenced scriptlet paths.
+ * Each scriptlet is a minimal valid TDL scriptlet that declares its inputs.
+ */
+function generateScriptlets(scenarios: { name: string; ir: IRAction[] }[]): GeneratedFile[] {
+  // Merge scriptlet calls across all scenarios
+  const allCalls = new Map<string, Set<string>>();
+  for (const sc of scenarios) {
+    for (const [path, inputs] of collectScriptletCalls(sc.ir)) {
+      const existing = allCalls.get(path) || new Set<string>();
+      for (const k of inputs) existing.add(k);
+      allCalls.set(path, existing);
+    }
+  }
+
+  const files: GeneratedFile[] = [];
+  for (const [path, inputNames] of allCalls) {
+    const scriptletId = path.replace(/^scriptlets\//, '').replace(/\.xml$/, '');
+    const inputsXml = [...inputNames]
+      .map(name => `    <var name="${escapeAttr(name)}" type="string"/>`)
+      .join('\n');
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<scriptlet id="${escapeAttr(scriptletId)}"
+            xmlns="http://www.gitb.com/tdl/v1/"
+            xmlns:gitb="http://www.gitb.com/core/v1/">
+  <params>
+${inputsXml}
+  </params>
+  <steps>
+    <log>"Scriptlet ${escapeXml(scriptletId)} executed (stub)."</log>
+  </steps>
+</scriptlet>`;
+
+    files.push({
+      filename: path, // e.g. "scriptlets/instructUser.xml"
+      xml,
+      type: 'scriptlet',
+      id: scriptletId,
+      name: scriptletId,
+    });
+  }
+
+  return files;
 }
 
 function toId(name: string): string {

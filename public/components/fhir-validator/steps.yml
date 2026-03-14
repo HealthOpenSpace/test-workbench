@@ -1,0 +1,724 @@
+# Language extension for FHIR Validator component
+# Provides validation, FHIRPath, matchetype comparison, and test data generation steps
+id: fhir-validator
+name: FHIR Validator Steps
+description: >
+  Steps for FHIR resource validation, FHIRPath evaluation,
+  matchetype comparison, and test data generation.
+
+steps:
+  # ==================================================================
+  # LOAD IMPLEMENTATION GUIDE
+  # ==================================================================
+
+  - match: '^load implementation guide "([^"]+)"$'
+    actions:
+      - process:
+          handler: 'FHIRValidator'
+          operation: 'loadIG'
+          output: 'loadIGResult'
+          inputs:
+            ig: '"$1"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^load implementation guide "([^"]+)" and verify$'
+    actions:
+      - process:
+          handler: 'FHIRValidator'
+          operation: 'loadIG'
+          output: 'loadIGResult'
+          inputs:
+            ig: '"$1"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Verify IG loaded successfully'
+          inputs:
+            actualstring: '$loadIGResult{severity}'
+            expectedstring: '"information"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is preloaded with package (\S+)$'
+    actions:
+      - process:
+          handler: 'FHIRValidator'
+          operation: 'loadIG'
+          output: 'loadIGResult'
+          to: '$1'
+          inputs:
+            ig: '"$2"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Verify IG loaded successfully'
+          inputs:
+            actualstring: '$loadIGResult{severity}'
+            expectedstring: '"information"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  # ==================================================================
+  # ENHANCED VALIDATION
+  # ==================================================================
+
+  - match: '^validate against "([^"]+)" with best practice "([^"]+)"$'
+    actions:
+      - process:
+          handler: 'FHIRValidator'
+          operation: 'validate'
+          output: 'validationOutcome'
+          inputs:
+            content: '$submitResult{payload}'
+            profileUrl: '"$1"'
+            bpWarnings: '"$2"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^validate against "([^"]+)" with resource id "([^"]+)"$'
+    actions:
+      - process:
+          handler: 'FHIRValidator'
+          operation: 'validate'
+          output: 'validationOutcome'
+          inputs:
+            content: '$submitResult{payload}'
+            profileUrl: '"$1"'
+            resourceIdRule: '"$2"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^validate "([^"]+)" against "([^"]+)"$'
+    actions:
+      - process:
+          handler: 'FHIRValidator'
+          operation: 'validate'
+          output: 'validationOutcome'
+          inputs:
+            content: '$$1'
+            profileUrl: '"$2"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^the validation should pass$'
+    actions:
+      - process:
+          handler: 'ValidationResultsProcessor'
+          operation: 'summarize'
+          output: 'validationSummary'
+          inputs:
+            outcome: '$validationOutcome'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'No validation errors'
+          inputs:
+            actualstring: '$validationSummary{errors}'
+            expectedstring: '"0"'
+
+  - match: '^the resource is valid$'
+    actions:
+      - process:
+          handler: 'FHIRValidator'
+          operation: 'validate'
+          output: 'validationOutcome'
+          inputs:
+            content: '$submitResult{payload}'
+      - process:
+          handler: 'ValidationResultsProcessor'
+          operation: 'summarize'
+          output: 'validationSummary'
+          inputs:
+            outcome: '$validationOutcome'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'No validation errors'
+          inputs:
+            actualstring: '$validationSummary{errors}'
+            expectedstring: '"0"'
+
+  - match: '^"([^"]+)" is valid$'
+    actions:
+      - process:
+          handler: 'FHIRValidator'
+          operation: 'validate'
+          output: 'validationOutcome'
+          inputs:
+            content: '$$1'
+      - process:
+          handler: 'ValidationResultsProcessor'
+          operation: 'summarize'
+          output: 'validationSummary'
+          inputs:
+            outcome: '$validationOutcome'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'No validation errors'
+          inputs:
+            actualstring: '$validationSummary{errors}'
+            expectedstring: '"0"'
+
+  - match: '^the validation should fail$'
+    actions:
+      - process:
+          handler: 'ValidationResultsProcessor'
+          operation: 'summarize'
+          output: 'validationSummary'
+          inputs:
+            outcome: '$validationOutcome'
+      - verify:
+          handler: 'NumberValidator'
+          desc: 'At least one validation error'
+          inputs:
+            actualnumber: '$validationSummary{errors}'
+            expectednumber: '0'
+            operation: 'greater_than'
+
+  - match: '^the validation issues should contain "([^"]+)"$'
+    actions:
+      - process:
+          handler: 'ValidationResultsProcessor'
+          operation: 'filterByText'
+          output: 'matchingIssues'
+          inputs:
+            outcome: '$validationOutcome'
+            text: '"$1"'
+      - verify:
+          handler: 'NumberValidator'
+          desc: 'At least one matching issue'
+          inputs:
+            actualnumber: '$matchingIssues{count}'
+            expectednumber: '0'
+            operation: 'greater_than'
+
+  - match: '^the validation should have no "([^"]+)" issues$'
+    actions:
+      - process:
+          handler: 'ValidationResultsProcessor'
+          operation: 'filterBySeverity'
+          output: 'filteredIssues'
+          inputs:
+            outcome: '$validationOutcome'
+            severity: '"$1"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'No issues of given severity'
+          inputs:
+            actualstring: '$filteredIssues{count}'
+            expectedstring: '"0"'
+
+  # ==================================================================
+  # FHIRPATH EVALUATION
+  # ==================================================================
+
+  - match: '^evaluate FHIRPath "([^"]+)" and expect "([^"]+)"$'
+    actions:
+      - process:
+          handler: 'FHIRPathProcessor'
+          operation: 'evaluate'
+          output: 'fhirpathResult'
+          inputs:
+            content: '$submitResult{payload}'
+            expression: '"$1"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'FHIRPath result matches expected value'
+          inputs:
+            actualstring: '$fhirpathResult'
+            expectedstring: '"$2"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^evaluate FHIRPath "([^"]+)" on "([^"]+)" and expect "([^"]+)"$'
+    actions:
+      - process:
+          handler: 'FHIRPathProcessor'
+          operation: 'evaluate'
+          output: 'fhirpathResult'
+          inputs:
+            content: '$$2'
+            expression: '"$1"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'FHIRPath result matches expected value'
+          inputs:
+            actualstring: '$fhirpathResult'
+            expectedstring: '"$3"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^evaluate FHIRPath "([^"]+)" exists$'
+    actions:
+      - process:
+          handler: 'FHIRPathProcessor'
+          operation: 'evaluate'
+          output: 'fhirpathResult'
+          inputs:
+            content: '$submitResult{payload}'
+            expression: '"($1).exists()"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'FHIRPath element exists'
+          inputs:
+            actualstring: '$fhirpathResult'
+            expectedstring: '"true"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^evaluate FHIRPath "([^"]+)" count is ([0-9]+)$'
+    actions:
+      - process:
+          handler: 'FHIRPathProcessor'
+          operation: 'evaluate'
+          output: 'fhirpathResult'
+          inputs:
+            content: '$submitResult{payload}'
+            expression: '"($1).count()"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'FHIRPath count matches'
+          inputs:
+            actualstring: '$fhirpathResult'
+            expectedstring: '"$2"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^evaluate FHIRPath "([^"]+)" on "([^"]+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - process:
+          handler: 'FHIRPathProcessor'
+          operation: 'evaluate'
+          output: '$3'
+          inputs:
+            content: '$$2'
+            expression: '"$1"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  # ==================================================================
+  # MATCHETYPE COMPARISON
+  # ==================================================================
+
+  - match: '^match "([^"]+)" against expected:$'
+    table:
+      required: []
+    actions:
+      - process:
+          handler: 'MatchetypeProcessor'
+          operation: 'compare'
+          output: 'matchResult'
+          inputs:
+            resource: '$$1'
+            matchetype: '$row'
+            mode: '"complete"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Complete match comparison'
+          inputs:
+            actualstring: '$matchResult{severity}'
+            expectedstring: '"information"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^partially match "([^"]+)" against expected:$'
+    table:
+      required: []
+    actions:
+      - process:
+          handler: 'MatchetypeProcessor'
+          operation: 'compare'
+          output: 'matchResult'
+          inputs:
+            resource: '$$1'
+            matchetype: '$row'
+            mode: '"partial"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Partial match comparison'
+          inputs:
+            actualstring: '$matchResult{severity}'
+            expectedstring: '"information"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^match "([^"]+)" against pattern "([^"]+)"$'
+    actions:
+      - process:
+          handler: 'MatchetypeProcessor'
+          operation: 'compare'
+          output: 'matchResult'
+          inputs:
+            resource: '$$1'
+            matchetype: '"$2"'
+            mode: '"partial"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Match pattern comparison'
+          inputs:
+            actualstring: '$matchResult{severity}'
+            expectedstring: '"information"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^the submission should match:$'
+    table:
+      required: []
+    actions:
+      - process:
+          handler: 'MatchetypeProcessor'
+          operation: 'compare'
+          output: 'matchResult'
+          inputs:
+            resource: '$submitResult{payload}'
+            matchetype: '$row'
+            mode: '"partial"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Submission match comparison'
+          inputs:
+            actualstring: '$matchResult{severity}'
+            expectedstring: '"information"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^compare "([^"]+)" against expected as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - process:
+          handler: 'MatchetypeProcessor'
+          operation: 'compare'
+          output: '$2'
+          inputs:
+            resource: '$$1'
+            matchetype: '$submitResult{payload}'
+            mode: '"partial"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^partially match "([^"]+)" against:$'
+    actions:
+      - process:
+          handler: 'MatchetypeProcessor'
+          operation: 'compare'
+          output: 'matchResult'
+          inputs:
+            resource: '$$1'
+            matchetype: '$docString'
+            mode: '"partial"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Partial match comparison'
+          inputs:
+            actualstring: '$matchResult{severity}'
+            expectedstring: '"information"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^exactly match "([^"]+)" against:$'
+    actions:
+      - process:
+          handler: 'MatchetypeProcessor'
+          operation: 'compare'
+          output: 'matchResult'
+          inputs:
+            resource: '$$1'
+            matchetype: '$docString'
+            mode: '"complete"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Complete match comparison'
+          inputs:
+            actualstring: '$matchResult{severity}'
+            expectedstring: '"information"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^"([^"]+)" should NOT match:$'
+    actions:
+      - process:
+          handler: 'MatchetypeProcessor'
+          operation: 'compare'
+          output: 'matchResult'
+          inputs:
+            resource: '$$1'
+            matchetype: '$docString'
+            mode: '"partial"'
+      - verify:
+          handler: 'ExpressionValidator'
+          desc: 'Correctly detected mismatch'
+          inputs:
+            expression: 'contains($matchResult, "error")'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^"([^"]+)" should not match pattern "([^"]+)"$'
+    actions:
+      - process:
+          handler: 'MatchetypeProcessor'
+          operation: 'compare'
+          output: 'matchResult'
+          inputs:
+            resource: '$$1'
+            matchetype: '"$2"'
+            mode: '"partial"'
+      - verify:
+          handler: 'ExpressionValidator'
+          desc: 'Correctly detected mismatch'
+          inputs:
+            expression: 'contains($matchResult, "error")'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  # ==================================================================
+  # TEST DATA GENERATION
+  # ==================================================================
+
+  - match: '^generate test data from profile "([^"]+)"$'
+    actions:
+      - process:
+          handler: 'TestDataGenerator'
+          operation: 'generate'
+          output: 'generatedResource'
+          inputs:
+            profile: '"$1"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^generate test data from profile "([^"]+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - process:
+          handler: 'TestDataGenerator'
+          operation: 'generate'
+          output: '$2'
+          inputs:
+            profile: '"$1"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^define mappings "([A-Za-z_][A-Za-z0-9_]*)":$'
+    table:
+      required: [path, expression]
+    actions:
+      - assign:
+          to: '$1'
+          value: []
+      - foreach:
+          from: '$tableRows'
+          do:
+            - listAppend:
+                list: '$1'
+                item:
+                  path: '$row.path'
+                  expression: '$row.expression'
+
+  - match: '^define mappings "([A-Za-z_][A-Za-z0-9_]*)" with parts:$'
+    table:
+      required: [path, part, expression]
+    actions:
+      - assign:
+          to: '$1'
+          value: []
+      - foreach:
+          from: '$tableRows'
+          do:
+            - listAppend:
+                list: '$1'
+                item:
+                  path: '$row.path'
+                  part: '$row.part'
+                  expression: '$row.expression'
+
+  - match: '^define data "([A-Za-z_][A-Za-z0-9_]*)":$'
+    table:
+      required: []
+    actions:
+      - assign:
+          to: '$1'
+          value: []
+      - foreach:
+          from: '$tableRows'
+          do:
+            - listAppend:
+                list: '$1'
+                item: '$row'
+
+  - match: '^generate test data from profile "([^"]+)" with mappings "([A-Za-z_][A-Za-z0-9_]*)" and data "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - process:
+          handler: 'TestDataGenerator'
+          operation: 'generate'
+          output: 'generatedResource'
+          inputs:
+            profile: '"$1"'
+            mappings: '$$2'
+            data: '$$3'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^generate test data from profile "([^"]+)" with mappings "([A-Za-z_][A-Za-z0-9_]*)" and data "([A-Za-z_][A-Za-z0-9_]*)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - process:
+          handler: 'TestDataGenerator'
+          operation: 'generate'
+          output: '$4'
+          inputs:
+            profile: '"$1"'
+            mappings: '$$2'
+            data: '$$3'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^generate test data from profile "([^"]+)" with:$'
+    table:
+      required: []
+    actions:
+      - assign:
+          to: 'testDataRows'
+          value: []
+      - foreach:
+          from: '$tableRows'
+          do:
+            - listAppend:
+                list: 'testDataRows'
+                item: '$row'
+      - process:
+          handler: 'TestDataGenerator'
+          operation: 'generateWithColumnMappings'
+          output: 'generatedResource'
+          inputs:
+            profile: '"$1"'
+            data: '$testDataRows'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^generate test bundle from profile "([^"]+)" with data "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - process:
+          handler: 'TestDataGenerator'
+          operation: 'generateBundle'
+          output: 'generatedBundle'
+          inputs:
+            profile: '"$1"'
+            data: '$$2'
+            bundle: '"true"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^generate test bundle from profile "([^"]+)" with mappings "([A-Za-z_][A-Za-z0-9_]*)" and data "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - process:
+          handler: 'TestDataGenerator'
+          operation: 'generateBundle'
+          output: 'generatedBundle'
+          inputs:
+            profile: '"$1"'
+            mappings: '$$2'
+            data: '$$3'
+            bundle: '"true"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  - match: '^generate and validate test data from profile "([^"]+)"$'
+    actions:
+      - process:
+          handler: 'TestDataGenerator'
+          operation: 'generate'
+          output: 'generatedResource'
+          inputs:
+            profile: '"$1"'
+      - process:
+          handler: 'FHIRValidator'
+          operation: 'validate'
+          output: 'validationOutcome'
+          inputs:
+            content: '$generatedResource'
+            profileUrl: '"$1"'
+      - process:
+          handler: 'ValidationResultsProcessor'
+          operation: 'summarize'
+          output: 'validationSummary'
+          inputs:
+            outcome: '$validationOutcome'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Generated test data validates'
+          inputs:
+            actualstring: '$validationSummary{errors}'
+            expectedstring: '"0"'
+    requires:
+      service: FHIR-validator
+      version: ">=1.0"
+
+  # ==================================================================
+  # RESOURCE TYPE ASSERTIONS
+  # ==================================================================
+
+  - match: '^the "([^"]+)" resource type should be "([^"]+)"$'
+    actions:
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'assertedResourceType'
+          inputs:
+            content: '$$1'
+            pointer: '"/resourceType"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Verify resource type'
+          inputs:
+            actualstring: '$assertedResourceType'
+            expectedstring: '"$2"'
+
+  - match: '^the generated resource type should be "([^"]+)"$'
+    actions:
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'assertedResourceType'
+          inputs:
+            content: '$generatedResource'
+            pointer: '"/resourceType"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Verify generated resource type'
+          inputs:
+            actualstring: '$assertedResourceType'
+            expectedstring: '"$1"'
+
+  # ==================================================================
+  # EXTRACT VALUE WITH JSON POINTER
+  # ==================================================================
+
+  - match: '^extract "([^"]+)" from "([^"]+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: '$3'
+          inputs:
+            content: '$$2'
+            pointer: '"$1"'

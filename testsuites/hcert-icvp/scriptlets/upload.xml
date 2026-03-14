@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scriptlet id="UploadIG" xmlns="http://www.gitb.com/tdl/v1/">
+  <!-- Reusable scriptlet to upload an IG to Matchbox via SMART Helper -->
+
+  <!-- Parameters accepted by the scriptlet -->
+  <params>
+    <var name="url" type="string"/>
+    <var name="target" type="string"><value>matchbox</value></var>
+  </params>
+
+  <steps>
+    <assign to="igHeaders{Content-Type}">"application/json"</assign>
+    <assign to="igHeaders{Accept}">"application/json"</assign>
+
+    <assign to="igParams{url}">$url</assign>
+    <assign to="igParams{target}">$target</assign>
+
+    <!-- JSON body for the POST -->
+    <assign to="igTemplate">
+      '{"ig_url":"${url}", "target":"${target}"}'
+    </assign>
+
+    <process handler="TemplateProcessor" operation="process" output="igBody">
+      <input name="syntax">'freemarker'</input>
+      <input name="template">$igTemplate</input>
+      <input name="parameters">$igParams</input>
+    </process>
+
+    <log>$igBody</log>
+
+    <!-- NOTE: from/to must match actor IDs in the calling testcase -->
+    <send id="uploadIG" desc="Upload IG" handler="HttpMessagingV2" from="User" to="SMARTHelper">
+      <input name="uri">"http://smart-helper:8000/upload_ig"</input>
+      <input name="method">"POST"</input>
+      <input name="headers">$igHeaders</input>
+      <input name="body">$igBody</input>
+    </send>
+
+    <verify handler="NumberValidator" desc="IG upload returns HTTP 200">
+      <input name="actualnumber">$uploadIG{response}{status}</input>
+      <input name="expectednumber">"200"</input>
+    </verify>
+  </steps>
+
+  <!-- Optional outputs for debugging / reuse -->
+  <output name="requestBody">$igBody</output>
+  <output name="status">$uploadIG{response}{status}</output>
+  <output name="responseBody">$uploadIG{response}{body}</output>
+</scriptlet>

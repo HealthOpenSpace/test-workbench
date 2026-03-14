@@ -9,18 +9,71 @@ steps:
   # ACTOR DECLARATIONS
   # ------------------------------------------------------------------
 
-  # Declare the system under test
+  # Declare the system under test (bare)
   - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test$'
     actions:
       - declareActor:
           id: '$1'
           role: 'SUT'
 
-  # Declare an available service/actor
+  # Declare the SUT with endpoint URL
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test on (https?://\S+)$'
+    actions:
+      - declareActor:
+          id: '$1'
+          role: 'SUT'
+          endpoint: '$2'
+
+  # Declare the SUT with canonical definition
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test as defined by (https?://\S+)$'
+    actions:
+      - declareActor:
+          id: '$1'
+          role: 'SUT'
+          canonical: '$2'
+
+  # Declare the SUT with endpoint URL and canonical definition
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test on (https?://\S+) as defined by (https?://\S+)$'
+    actions:
+      - declareActor:
+          id: '$1'
+          role: 'SUT'
+          endpoint: '$2'
+          canonical: '$3'
+
+  # Declare an available service/actor (bare)
   - match: '^([A-Za-z][A-Za-z0-9_]*) is available$'
     actions:
       - declareActor:
           id: '$1'
+
+  # Declare an actor with endpoint URL (accepts "on" or "at", quoted or unquoted)
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is available (?:on|at) "?(https?://[^"\s]+)"?$'
+    actions:
+      - declareActor:
+          id: '$1'
+          endpoint: '$2'
+      - assign:
+          to: '$1Base'
+          value: '"$2"'
+
+  # Declare an actor with canonical definition
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is available as defined by "?(https?://[^"\s]+)"?$'
+    actions:
+      - declareActor:
+          id: '$1'
+          canonical: '$2'
+
+  # Declare an actor with endpoint URL and canonical definition
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is available (?:on|at) "?(https?://[^"\s]+)"? as defined by "?(https?://[^"\s]+)"?$'
+    actions:
+      - declareActor:
+          id: '$1'
+          endpoint: '$2'
+          canonical: '$3'
+      - assign:
+          to: '$1Base'
+          value: '"$2"'
 
   # Declare an actor with a descriptive name
   - match: '^([A-Za-z][A-Za-z0-9_]*) is available as "([^"]+)"$'
@@ -33,67 +86,131 @@ steps:
   # SETUP / BACKGROUND
   # ------------------------------------------------------------------
 
-  # Setup / Background — actor-targeted configuration
+  # Setup / Background — set FHIR headers and server base URL
   - match: '^([A-Za-z][A-Za-z0-9_]*) is configured$'
     actions:
-      - call:
-          path: scriptlets/setupData.xml
-          to: '$1'
-          inputs:
-            ingestData: 'N'
-            serverApiRoot: '$SYSTEM{serverApiRoot}'
+      - assign:
+          to: 'fhirHeaders{Content-Type}'
+          value: '"application/fhir+json"'
+      - assign:
+          to: 'fhirHeaders{Accept}'
+          value: '"application/fhir+json"'
+      - assign:
+          to: 'fhirServerBase'
+          value: '"http://fhir-server:8080/fhir"'
+      - log: 'concat("Configured ", "$1", " — FHIR server at ", $fhirServerBase)'
 
   - match: '^([A-Za-z][A-Za-z0-9_]*) is configured with data pool "([^"]+)"$'
     actions:
-      - call:
-          path: scriptlets/setupData.xml
-          to: '$1'
-          inputs:
-            ingestData: 'Y'
-            dataPool: '$2'
-            serverApiRoot: '$SYSTEM{serverApiRoot}'
+      - assign:
+          to: 'fhirHeaders{Content-Type}'
+          value: '"application/fhir+json"'
+      - assign:
+          to: 'fhirHeaders{Accept}'
+          value: '"application/fhir+json"'
+      - assign:
+          to: 'fhirServerBase'
+          value: '"http://fhir-server:8080/fhir"'
+      - assign:
+          to: 'dataPool'
+          value: '"$2"'
+      - log: 'concat("Configured ", "$1", " with data pool ", $dataPool)'
 
   # ------------------------------------------------------------------
-  # SERVER: happy path – Register allergy twice and verify
+  # SERVER: happy path – Register allergy and verify
   # ------------------------------------------------------------------
+
   # Actor registers an allergy (implicit target)
   - match: '^([A-Za-z][A-Za-z0-9_]*) registers an allergy with:$'
     table:
       required: [code.coding.code, code.coding.display, code.text, reaction.code, reaction.display]
     actions:
-      - call:
-          path: scriptlets/registerAllergy.xml
-          output: 'lastRegistered'
+      - assign:
+          to: 'allergyBody'
+          value: >-
+            concat('{"resourceType":"AllergyIntolerance","code":{"coding":[{"system":"http://snomed.info/sct","code":"',
+            "$row.code.coding.code",
+            '","display":"',
+            "$row.code.coding.display",
+            '"}],"text":"',
+            "$row.code.text",
+            '"},"reaction":[{"manifestation":[{"coding":[{"system":"http://snomed.info/sct","code":"',
+            "$row.reaction.code",
+            '","display":"',
+            "$row.reaction.display",
+            '"}]}]}]}')
+      - log: 'concat("[REQ] POST AllergyIntolerance: ", $allergyBody)'
+      - send:
+          id: 'lastRequest'
+          desc: 'Register AllergyIntolerance resource'
+          handler: 'HttpMessagingV2'
           from: '$1'
           inputs:
-            codeCode: '$row.code.coding.code'
-            codeDisplay: '$row.code.coding.display'
-            codeText: '$row.code.text'
-            reactionCode: '$row.reaction.code'
-            reactionDisplay: '$row.reaction.display'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
+            uri: 'concat($fhirServerBase, "/AllergyIntolerance")'
+            method: '"POST"'
+            headers: '$fhirHeaders'
+            body: '$allergyBody'
+      - log: 'concat("[RESP] Register allergy status: ", $lastRequest{response}{status})'
+      - verify:
+          handler: 'NumberValidator'
+          desc: 'Register allergy returns HTTP 201'
+          inputs:
+            actualnumber: '$lastRequest{response}{status}'
+            expectednumber: '"201"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'lastRegistered'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/id"'
+      - log: 'concat("[INFO] Registered allergy ID: ", $lastRegistered)'
 
   # Actor registers an allergy on a specific target
   - match: '^([A-Za-z][A-Za-z0-9_]*) registers an allergy on ([A-Za-z][A-Za-z0-9_]*) with:$'
     table:
       required: [code.coding.code, code.coding.display, code.text, reaction.code, reaction.display]
     actions:
-      - call:
-          path: scriptlets/registerAllergy.xml
-          output: 'lastRegistered'
+      - assign:
+          to: 'allergyBody'
+          value: >-
+            concat('{"resourceType":"AllergyIntolerance","code":{"coding":[{"system":"http://snomed.info/sct","code":"',
+            "$row.code.coding.code",
+            '","display":"',
+            "$row.code.coding.display",
+            '"}],"text":"',
+            "$row.code.text",
+            '"},"reaction":[{"manifestation":[{"coding":[{"system":"http://snomed.info/sct","code":"',
+            "$row.reaction.code",
+            '","display":"',
+            "$row.reaction.display",
+            '"}]}]}]}')
+      - log: 'concat("[REQ] POST AllergyIntolerance to $2: ", $allergyBody)'
+      - send:
+          id: 'lastRequest'
+          desc: 'Register AllergyIntolerance resource'
+          handler: 'HttpMessagingV2'
           from: '$1'
           to: '$2'
           inputs:
-            codeCode: '$row.code.coding.code'
-            codeDisplay: '$row.code.coding.display'
-            codeText: '$row.code.text'
-            reactionCode: '$row.reaction.code'
-            reactionDisplay: '$row.reaction.display'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
+            uri: 'concat($fhirServerBase, "/AllergyIntolerance")'
+            method: '"POST"'
+            headers: '$fhirHeaders'
+            body: '$allergyBody'
+      - log: 'concat("[RESP] Register allergy status: ", $lastRequest{response}{status})'
+      - verify:
+          handler: 'NumberValidator'
+          desc: 'Register allergy returns HTTP 201'
+          inputs:
+            actualnumber: '$lastRequest{response}{status}'
+            expectednumber: '"201"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'lastRegistered'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/id"'
 
   - match: '^save the returned identifier as "([A-Za-z_][A-Za-z0-9_]*)"$'
     actions:
@@ -105,83 +222,107 @@ steps:
     table:
       required: [code, identifier]
     actions:
-      - assign:
-          to: 'expectedData'
-          value: []
+      - send:
+          id: 'lastRequest'
+          desc: 'Search AllergyIntolerance resources'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: 'concat($fhirServerBase, "/AllergyIntolerance")'
+            method: '"GET"'
+            headers: '$fhirHeaders'
+      - verify:
+          handler: 'NumberValidator'
+          desc: 'Search returns HTTP 200'
+          inputs:
+            actualnumber: '$lastRequest{response}{status}'
+            expectednumber: '"200"'
+      - log: 'concat("[RESP] AllergyIntolerance search: ", $lastRequest{response}{body})'
       - foreach:
           from: '$tableRows'
           do:
-            - listAppend:
-                list: 'expectedData'
-                item:
-                  code: '$row.code'
-                  identifier: '$row.identifier'
-      - call:
-          path: scriptlets/checkRegisteredAllergies.xml
-          inputs:
-            expectedData: '$expectedData'
+            - verify:
+                handler: 'ExpressionValidator'
+                desc: 'Response contains expected allergy code'
+                inputs:
+                  expression: 'contains($lastRequest{response}{body}, "$row.code")'
 
   # ------------------------------------------------------------------
   # SERVER/CLIENT: create + submit + status/OO checks (invalid flow too)
   # ------------------------------------------------------------------
-  # Actor creates an allergy resource
+
+  # Actor creates an allergy resource (with configurable resourceType)
   - match: '^([A-Za-z][A-Za-z0-9_]*) creates an allergy resource with:$'
     table:
       required: [resourceType, code.coding.code, code.coding.display, code.text, reaction.code, reaction.display]
     actions:
-      - call:
-          path: scriptlets/createAllergy.xml
-          output: createdAllergy
-          from: '$1'
-          inputs:
-            resourceType: '$row.resourceType'
-            codeCode: '$row.code.coding.code'
-            codeDisplay: '$row.code.coding.display'
-            codeText: '$row.code.text'
-            reactionCode: '$row.reaction.code'
-            reactionDisplay: '$row.reaction.display'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
+      - assign:
+          to: 'createdAllergyBody'
+          value: >-
+            concat('{"resourceType":"',
+            "$row.resourceType",
+            '","code":{"coding":[{"system":"http://snomed.info/sct","code":"',
+            "$row.code.coding.code",
+            '","display":"',
+            "$row.code.coding.display",
+            '"}],"text":"',
+            "$row.code.text",
+            '"},"reaction":[{"manifestation":[{"coding":[{"system":"http://snomed.info/sct","code":"',
+            "$row.reaction.code",
+            '","display":"',
+            "$row.reaction.display",
+            '"}]}]}]}')
+      - log: 'concat("[INFO] Created allergy resource: ", $createdAllergyBody)'
 
   # Actor submits the created allergy (implicit target)
   - match: '^([A-Za-z][A-Za-z0-9_]*) submits the created allergy$'
     actions:
-      - call:
-          path: scriptlets/submitAllergy.xml
-          output: 'submitResult'
+      - log: 'concat("[REQ] POST AllergyIntolerance: ", $createdAllergyBody)'
+      - send:
+          id: 'lastRequest'
+          desc: 'Submit AllergyIntolerance to FHIR server'
+          handler: 'HttpMessagingV2'
           from: '$1'
           inputs:
-            content: '$createdAllergy{content}'
+            uri: 'concat($fhirServerBase, "/AllergyIntolerance")'
+            method: '"POST"'
+            headers: '$fhirHeaders'
+            body: '$createdAllergyBody'
+      - log: 'concat("[RESP] Submit allergy status: ", $lastRequest{response}{status})'
 
   # Actor submits the created allergy to a named target
   - match: '^([A-Za-z][A-Za-z0-9_]*) submits the created allergy to ([A-Za-z][A-Za-z0-9_]*)$'
     actions:
-      - call:
-          path: scriptlets/submitAllergy.xml
-          output: 'submitResult'
+      - log: 'concat("[REQ] POST AllergyIntolerance: ", $createdAllergyBody)'
+      - send:
+          id: 'lastRequest'
+          desc: 'Submit AllergyIntolerance to FHIR server'
+          handler: 'HttpMessagingV2'
           from: '$1'
           to: '$2'
           inputs:
-            content: '$createdAllergy{content}'
+            uri: 'concat($fhirServerBase, "/AllergyIntolerance")'
+            method: '"POST"'
+            headers: '$fhirHeaders'
+            body: '$createdAllergyBody'
+      - log: 'concat("[RESP] Submit allergy status: ", $lastRequest{response}{status})'
 
   - match: '^the response status should be "([0-9]{3})"$'
     actions:
       - verify:
-          handler: 'StringValidator'
-          desc: 'Verify HTTP status'
+          handler: 'NumberValidator'
+          desc: 'Verify HTTP response status'
           inputs:
-            actualstring: '$submitResult{status}'
-            expectedstring: '"$1"'
+            actualnumber: '$lastRequest{response}{status}'
+            expectednumber: '"$1"'
 
   - match: '^the OperationOutcome at "(.+)" should be "(.+)"$'
     actions:
       - process:
-          handler: 'JSONPointerProcessor'
+          handler: 'JsonPointerProcessor'
           operation: 'process'
           output: 'jsonValue'
           inputs:
-            content: '$submitResult{payload}'
+            content: '$lastRequest{response}{body}'
             pointer: '"$1"'
       - verify:
           handler: 'StringValidator'
@@ -190,15 +331,15 @@ steps:
             actualstring: '$jsonValue'
             expectedstring: '"$2"'
 
-  # Convenience phrase for POST+201 check (your example)
+  # Convenience phrase for POST+201 check
   - match: '^the resource is correctly uploaded to the server$'
     actions:
       - verify:
-          handler: 'StringValidator'
+          handler: 'NumberValidator'
           desc: 'Verify 201 Created'
           inputs:
-            actualstring: '$submitResult{status}'
-            expectedstring: '"201"'
+            actualnumber: '$lastRequest{response}{status}'
+            expectednumber: '"201"'
 
   # ------------------------------------------------------------------
   # CLIENT / MANUAL FLOWS (GF4, GF5, GF7, GF9)
@@ -395,909 +536,149 @@ steps:
             expectedstring: '"not-null"'
 
   # ------------------------------------------------------------------
-  # HCERT QR CODE AND CWT VALIDATION
+  # GENERIC HTTP STEPS (actor-relative, reusable across features)
   # ------------------------------------------------------------------
-  
-  # Setup steps for HCERT testing
-  - match: '^a Receiver is presented a QR Code$'
+
+  # Actor calls Actor at "/path" with: (docstring body) — JSON POST
+  - match: '^([A-Za-z][A-Za-z0-9_]*) calls ([A-Za-z][A-Za-z0-9_]*) at "([^"]+)" with:$'
     actions:
       - assign:
-          to: 'receiverRole'
-          value: '"active"'
+          to: 'jsonHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'jsonHeaders{Accept}'
+          value: '"application/json"'
+      - send:
+          id: 'lastRequest'
+          desc: 'POST JSON request'
+          handler: 'HttpMessagingV2'
+          from: '$1'
+          to: '$2'
+          inputs:
+            uri: 'concat($$2Base, "$3")'
+            method: '"POST"'
+            headers: '$jsonHeaders'
+            body: '$docString'
 
-  - match: '^the QR code uses a format as defined in \(ISO/IEC 18004:2015\)$'
+  # Actor calls Actor at "/path" with cose and payload (template-based)
+  - match: '^([A-Za-z][A-Za-z0-9_]*) calls ([A-Za-z][A-Za-z0-9_]*) at "([^"]+)" with cose and payload$'
     actions:
       - assign:
-          to: 'qrFormat'
-          value: '"ISO18004"'
-
-  - match: '^the QR code uses Alphanumeric mode \(Mode 2\) encoding$'
-    actions:
+          to: 'tplParamsCosePayload{cose}'
+          value: '$coseVal'
       - assign:
-          to: 'qrMode'
-          value: '"alphanumeric"'
-
-  - match: '^the QR code uses Base45 encoding$'
-    actions:
+          to: 'tplParamsCosePayload{payload}'
+          value: '$payloadVal'
       - assign:
-          to: 'qrEncoding'
-          value: '"base45"'
-
-  # QR Code scanning and decoding
-  - match: '^the Receiver scans the QR Code$'
-    actions:
-      - call:
-          path: 'scriptlets/instructUser.xml'
-          inputs:
-            message: '"Please provide a QR code image for scanning"'
+          to: 'tplCosePayload'
+          value: >-
+            '{"cose":${cose},"payload":${payload}}'
       - process:
-          handler: 'HCERTProcessor'
-          operation: 'decodeImage'
-          output: 'qrDecodeResult'
-          inputs:
-            image: '$userProvidedImage'
-    requires:
-      service: HCERT-validator
-      version: ">=1.0"
-
-  # QR Code validation results
-  - match: '^the QR code is successfully decoded$'
-    actions:
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify QR decode success'
-          inputs:
-            actualstring: '$qrDecodeResult{decoded}'
-            expectedstring: '"true"'
-
-  - match: '^the decoded raw Alphanumeric string starts with "HC1:" prefix$'
-    actions:
-      - process:
-          handler: 'StringProcessor'
-          operation: 'startsWith'
-          output: 'hasHC1Prefix'
-          inputs:
-            text: '$qrDecodeResult{raw_data}'
-            prefix: '"HC1:"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify HC1 prefix'
-          inputs:
-            actualstring: '$hasHC1Prefix'
-            expectedstring: '"true"'
-
-  - match: '^the decoded raw Alphanumeric string does not start with "HC1:" prefix$'
-    actions:
-      - process:
-          handler: 'StringProcessor'
-          operation: 'startsWith'
-          output: 'hasHC1Prefix'
-          inputs:
-            text: '$qrDecodeResult{raw_data}'
-            prefix: '"HC1:"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify no HC1 prefix'
-          inputs:
-            actualstring: '$hasHC1Prefix'
-            expectedstring: '"false"'
-
-  - match: '^the QR Code is rejected with an Error$'
-    actions:
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify error present'
-          inputs:
-            actualstring: '$qrDecodeResult{error}'
-            expectedstring: '"decode_failed"'
-
-  # HCERT string decoding
-  - match: '^Receiver decodes the raw Alphanumeric string from QR Code$'
-    actions:
-      - process:
-          handler: 'HCERTProcessor'
-          operation: 'decodeHCERT'
-          output: 'hcertDecoded'
-          inputs:
-            qr_data: '$qrDecodeResult{raw_data}'
-    requires:
-      service: HCERT-validator
-      version: ">=1.0"
-
-  - match: '^removes the "HC1:" prefix$'
-    actions:
-      - process:
-          handler: 'StringProcessor'
-          operation: 'removePrefix'
-          output: 'withoutPrefix'
-          inputs:
-            text: '$qrDecodeResult{raw_data}'
-            prefix: '"HC1:"'
-
-  # Base45 and ZLIB processing
-  - match: '^the remaining Alphanumeric string can be Base45 decoded to retrieve a binary payload$'
-    actions:
-      - verify:
-          handler: 'NumberValidator'
-          desc: 'Verify Base45 decode successful'
-          inputs:
-            actualnumber: '$hcertDecoded{diagnostics}{base45_decoded_len}'
-            expectednumber: '0'
-            operation: 'greater_than'
-
-  - match: '^ZLIB decompression can be applied to the binary payload$'
-    actions:
-      - verify:
-          handler: 'NumberValidator'
-          desc: 'Verify ZLIB decompression successful'
-          inputs:
-            actualnumber: '$hcertDecoded{diagnostics}{zlib_decompressed_len}'
-            expectednumber: '0'
-            operation: 'greater_than'
-
-  # CWT validation
-  - match: '^the retrieved Payload is a valid CBOR Web Token \(CWT\) as defined \[here\]\((.+)\)$'
-    actions:
-      - verify:
-          handler: 'StructureValidator'
-          desc: 'Validate CWT structure'
-          inputs:
-            content: '$hcertDecoded{payload}'
-            profileUrl: '"$1"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  - match: '^a valid CBOR CWT token is decoded from a QR Code$'
-    actions:
-      - assign:
-          to: 'validCWT'
-          value: '$hcertDecoded{payload}'
-
-  - match: '^THE CWT is parsed$'
-    actions:
-      - process:
-          handler: 'HCERTProcessor'
-          operation: 'extractMetadata'
-          output: 'cwtMetadata'
-          inputs:
-            cose: '$hcertDecoded{cose}'
-            payload: '$hcertDecoded{payload}'
-
-  - match: '^CWT structure validates against the StructureDefinition as defined \[here\]\((.+)\)$'
-    actions:
-      - verify:
-          handler: 'StructureValidator'
-          desc: 'Validate against CWT StructureDefinition'
-          inputs:
-            content: '$validCWT'
-            profileUrl: '"$1"'
-
-  # Algorithm validation
-  - match: '^a valid CWT$'
-    actions:
-      - assign:
-          to: 'cwtForValidation'
-          value: '$hcertDecoded{payload}'
-
-  - match: '^the Receiver validates the algorithm i\.e\. Claim ''1'' in the Header$'
-    actions:
-      - process:
-          handler: 'JSONPointerProcessor'
+          handler: 'TemplateProcessor'
           operation: 'process'
-          output: 'algorithmClaim'
+          output: 'templateBody'
           inputs:
-            content: '$hcertDecoded{cose}{protected}'
-            pointer: '"/1"'
+            syntax: '"freemarker"'
+            template: '$tplCosePayload'
+            parameters: '$tplParamsCosePayload'
+      - assign:
+          to: 'jsonHeaders{Content-Type}'
+          value: '"application/json"'
+      - send:
+          id: 'lastRequest'
+          desc: 'POST with cose and payload'
+          handler: 'HttpMessagingV2'
+          from: '$1'
+          to: '$2'
+          inputs:
+            uri: 'concat($$2Base, "$3")'
+            method: '"POST"'
+            headers: '$jsonHeaders'
+            body: '$templateBody'
 
-  - match: '^the algorithm is be one of the supported types:$'
-    table:
-      required: [Algorithm, COSE Parameter, SOG-IT Level]
-    actions:
-      - foreach:
-          from: '$tableRows'
-          do:
-            - process:
-                handler: 'AlgorithmValidator'
-                operation: 'validateSupported'
-                output: 'algorithmValid'
-                inputs:
-                  algorithm: '$algorithmClaim'
-                  supportedAlgorithms: '$row.Algorithm'
-
-  # Key identifier validation  
-  - match: '^a valid CWT Structure$'
+  # Actor calls Actor at "/path" with hcert and payload (template-based)
+  - match: '^([A-Za-z][A-Za-z0-9_]*) calls ([A-Za-z][A-Za-z0-9_]*) at "([^"]+)" with hcert and payload$'
     actions:
       - assign:
-          to: 'cwtStructure'
-          value: '$hcertDecoded'
-
-  - match: '^the Receiver extracts the Key Identifier i\.e\. Claim ''4'' in the Header$'
-    actions:
+          to: 'tplParamsHcertPayload{hcert}'
+          value: '$hcertVal'
+      - assign:
+          to: 'tplParamsHcertPayload{payload}'
+          value: '$payloadVal'
+      - assign:
+          to: 'tplHcertPayload'
+          value: >-
+            '{"hcert":${hcert},"payload":${payload}}'
       - process:
-          handler: 'JSONPointerProcessor'
+          handler: 'TemplateProcessor'
           operation: 'process'
-          output: 'keyIdentifier'
+          output: 'templateBody'
           inputs:
-            content: '$hcertDecoded{cose}{protected}'
-            pointer: '"/4"'
-
-  - match: '^extracts the Issuer i\.e\. Claim ''1'' from the Payload$'
-    actions:
-      - process:
-          handler: 'JSONPointerProcessor'
-          operation: 'process'
-          output: 'issuerClaim'
+            syntax: '"freemarker"'
+            template: '$tplHcertPayload'
+            parameters: '$tplParamsHcertPayload'
+      - assign:
+          to: 'jsonHeaders{Content-Type}'
+          value: '"application/json"'
+      - send:
+          id: 'lastRequest'
+          desc: 'POST with hcert and payload'
+          handler: 'HttpMessagingV2'
+          from: '$1'
+          to: '$2'
           inputs:
-            content: '$hcertDecoded{payload}'
-            pointer: '"/1"'
+            uri: 'concat($$2Base, "$3")'
+            method: '"POST"'
+            headers: '$jsonHeaders'
+            body: '$templateBody'
 
-  - match: '^the extracted Key Id is 8 bytes$'
-    actions:
-      - verify:
-          handler: 'KeyValidator'
-          desc: 'Verify Key ID is 8 bytes'
-          inputs:
-            keyId: '$keyIdentifier'
-            expectedLength: '8'
-
-  - match: '^the extracted issuer is ISO 3166-1 alpha-2 Country Code$'
-    actions:
-      - verify:
-          handler: 'CountryCodeValidator'
-          desc: 'Verify issuer is valid country code'
-          inputs:
-            countryCode: '$issuerClaim'
-            standard: '"ISO3166-1-alpha-2"'
-
-  - match: '^the public key can be retrieved from the trust network using the Country Code and Key Id$'
-    actions:
-      - process:
-          handler: 'TrustNetworkProcessor'
-          operation: 'retrievePublicKey'
-          output: 'publicKey'
-          inputs:
-            countryCode: '$issuerClaim'
-            keyId: '$keyIdentifier'
-
-  # Signature validation
-  - match: '^the Receiver extracts the public key of the issuer from the trust network that matches the Key Id in the COSE Header$'
+  # Backwards compat: Actor sends JSON POST to a full URL with: (docstring)
+  - match: '^([A-Za-z][A-Za-z0-9_]*) sends (?:a )?(?:HCERT )?(?:decode |JSON )?(?:request |POST )?to "([^"]+)" with:$'
     actions:
       - assign:
-          to: 'matchedPublicKey'
-          value: '$publicKey'
-
-  - match: '^the payload has not expired i\.e\. current time is between Issued at \(Claim ''6''\) and  Expiration Date \(Claim ''4''\)$'
-    actions:
-      - process:
-          handler: 'TimeValidator'
-          operation: 'validateTimeRange'
-          output: 'timeValid'
-          inputs:
-            issuedAt: '$hcertDecoded{payload}{6}'
-            expirationDate: '$hcertDecoded{payload}{4}'
-
-  - match: '^the signature is cryptographically valid$'
-    actions:
-      - verify:
-          handler: 'SignatureValidator'
-          desc: 'Verify cryptographic signature'
-          inputs:
-            signature: '$hcertDecoded{cose}{signature}'
-            publicKey: '$matchedPublicKey'
-            payload: '$hcertDecoded{payload}'
-
-  # HCERT payload extraction
-  - match: '^a CWT with verified signature$'
-    actions:
+          to: 'jsonHeaders{Content-Type}'
+          value: '"application/json"'
       - assign:
-          to: 'verifiedCWT'
-          value: '$hcertDecoded'
+          to: 'jsonHeaders{Accept}'
+          value: '"application/json"'
+      - send:
+          id: 'lastRequest'
+          desc: 'POST JSON request'
+          handler: 'HttpMessagingV2'
+          from: '$1'
+          inputs:
+            uri: '"$2"'
+            method: '"POST"'
+            headers: '$jsonHeaders'
+            body: '$docString'
 
-  - match: '^the Receiver extracts the HCERT Payload using claim key -260$'
+  # Extract a JSON pointer value from the last response
+  # Accepts: extract "/path" as "var" OR extract "/path" from the response as "var"
+  - match: '^extract "([^"]+)" (?:from the response )?as "([A-Za-z_][A-Za-z0-9_]*)"$'
     actions:
       - process:
-          handler: 'JSONPointerProcessor'
+          handler: 'JsonPointerProcessor'
           operation: 'process'
-          output: 'hcertPayload'
-          inputs:
-            content: '$verifiedCWT{payload}'
-            pointer: '"/-260"'
-
-  - match: '^the extracted HCERT structure validates against the StructureDefinition as defined \[here\]\((.+)\)$'
-    actions:
-      - verify:
-          handler: 'StructureValidator'
-          desc: 'Validate HCERT structure'
-          inputs:
-            content: '$hcertPayload'
-            profileUrl: '"$1"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # ==================================================================
-  # LOAD IMPLEMENTATION GUIDE
-  # ==================================================================
-
-  # Load an IG package into the running validator (by package id, URL, or path)
-  - match: '^load implementation guide "([^"]+)"$'
-    actions:
-      - process:
-          handler: 'FHIRValidator'
-          operation: 'loadIG'
-          output: 'loadIGResult'
-          inputs:
-            ig: '"$1"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Load IG and verify success
-  - match: '^load implementation guide "([^"]+)" and verify$'
-    actions:
-      - process:
-          handler: 'FHIRValidator'
-          operation: 'loadIG'
-          output: 'loadIGResult'
-          inputs:
-            ig: '"$1"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify IG loaded successfully'
-          inputs:
-            actualstring: '$loadIGResult{severity}'
-            expectedstring: '"information"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Actor-targeted: preload a package into a validator/server (package id or URL)
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is preloaded with package (\S+)$'
-    actions:
-      - process:
-          handler: 'FHIRValidator'
-          operation: 'loadIG'
-          output: 'loadIGResult'
-          to: '$1'
-          inputs:
-            ig: '"$2"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify IG loaded successfully'
-          inputs:
-            actualstring: '$loadIGResult{severity}'
-            expectedstring: '"information"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # ==================================================================
-  # ENHANCED VALIDATION (profile options, severity, issue filtering)
-  # ==================================================================
-
-  # Validate with best-practice warning level
-  - match: '^validate against "([^"]+)" with best practice "([^"]+)"$'
-    actions:
-      - process:
-          handler: 'FHIRValidator'
-          operation: 'validate'
-          output: 'validationOutcome'
-          inputs:
-            content: '$submitResult{payload}'
-            profileUrl: '"$1"'
-            bpWarnings: '"$2"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Validate requiring resource id
-  - match: '^validate against "([^"]+)" with resource id "([^"]+)"$'
-    actions:
-      - process:
-          handler: 'FHIRValidator'
-          operation: 'validate'
-          output: 'validationOutcome'
-          inputs:
-            content: '$submitResult{payload}'
-            profileUrl: '"$1"'
-            resourceIdRule: '"$2"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Validate a named variable instead of the last submission
-  - match: '^validate "([^"]+)" against "([^"]+)"$'
-    actions:
-      - process:
-          handler: 'FHIRValidator'
-          operation: 'validate'
-          output: 'validationOutcome'
-          inputs:
-            content: '$$1'
-            profileUrl: '"$2"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Assert no validation errors
-  - match: '^the validation should pass$'
-    actions:
-      - process:
-          handler: 'ValidationResultsProcessor'
-          operation: 'summarize'
-          output: 'validationSummary'
-          inputs:
-            outcome: '$validationOutcome'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'No validation errors'
-          inputs:
-            actualstring: '$validationSummary{errors}'
-            expectedstring: '"0"'
-
-  # Assert validation fails (at least one error)
-  - match: '^the validation should fail$'
-    actions:
-      - process:
-          handler: 'ValidationResultsProcessor'
-          operation: 'summarize'
-          output: 'validationSummary'
-          inputs:
-            outcome: '$validationOutcome'
-      - verify:
-          handler: 'NumberValidator'
-          desc: 'At least one validation error'
-          inputs:
-            actualnumber: '$validationSummary{errors}'
-            expectednumber: '0'
-            operation: 'greater_than'
-
-  # Check that validation issues contain a specific message
-  - match: '^the validation issues should contain "([^"]+)"$'
-    actions:
-      - process:
-          handler: 'ValidationResultsProcessor'
-          operation: 'filterByText'
-          output: 'matchingIssues'
-          inputs:
-            outcome: '$validationOutcome'
-            text: '"$1"'
-      - verify:
-          handler: 'NumberValidator'
-          desc: 'At least one matching issue'
-          inputs:
-            actualnumber: '$matchingIssues{count}'
-            expectednumber: '0'
-            operation: 'greater_than'
-
-  # Check that validation has no issues of a given severity
-  - match: '^the validation should have no "([^"]+)" issues$'
-    actions:
-      - process:
-          handler: 'ValidationResultsProcessor'
-          operation: 'filterBySeverity'
-          output: 'filteredIssues'
-          inputs:
-            outcome: '$validationOutcome'
-            severity: '"$1"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'No issues of given severity'
-          inputs:
-            actualstring: '$filteredIssues{count}'
-            expectedstring: '"0"'
-
-  # ==================================================================
-  # ENHANCED FHIRPATH EVALUATION
-  # ==================================================================
-
-  # Evaluate FHIRPath and assert the result equals a value
-  - match: '^evaluate FHIRPath "([^"]+)" and expect "([^"]+)"$'
-    actions:
-      - process:
-          handler: 'FHIRPathProcessor'
-          operation: 'evaluate'
-          output: 'fhirpathResult'
-          inputs:
-            content: '$submitResult{payload}'
-            expression: '"$1"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'FHIRPath result matches expected value'
-          inputs:
-            actualstring: '$fhirpathResult'
-            expectedstring: '"$2"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Evaluate FHIRPath against a named variable and assert value
-  - match: '^evaluate FHIRPath "([^"]+)" on "([^"]+)" and expect "([^"]+)"$'
-    actions:
-      - process:
-          handler: 'FHIRPathProcessor'
-          operation: 'evaluate'
-          output: 'fhirpathResult'
-          inputs:
-            content: '$$2'
-            expression: '"$1"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'FHIRPath result matches expected value'
-          inputs:
-            actualstring: '$fhirpathResult'
-            expectedstring: '"$3"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Evaluate FHIRPath and check existence (true/false)
-  - match: '^evaluate FHIRPath "([^"]+)" exists$'
-    actions:
-      - process:
-          handler: 'FHIRPathProcessor'
-          operation: 'evaluate'
-          output: 'fhirpathResult'
-          inputs:
-            content: '$submitResult{payload}'
-            expression: '"($1).exists()"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'FHIRPath element exists'
-          inputs:
-            actualstring: '$fhirpathResult'
-            expectedstring: '"true"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Evaluate FHIRPath count and assert
-  - match: '^evaluate FHIRPath "([^"]+)" count is ([0-9]+)$'
-    actions:
-      - process:
-          handler: 'FHIRPathProcessor'
-          operation: 'evaluate'
-          output: 'fhirpathResult'
-          inputs:
-            content: '$submitResult{payload}'
-            expression: '"($1).count()"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'FHIRPath count matches'
-          inputs:
-            actualstring: '$fhirpathResult'
-            expectedstring: '"$2"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Evaluate FHIRPath on a named variable and save result
-  - match: '^evaluate FHIRPath "([^"]+)" on "([^"]+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
-    actions:
-      - process:
-          handler: 'FHIRPathProcessor'
-          operation: 'evaluate'
-          output: '$3'
-          inputs:
-            content: '$$2'
-            expression: '"$1"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # ==================================================================
-  # MATCH COMPARISON
-  # ==================================================================
-
-  # Complete match: resource must exactly match the expected pattern
-  - match: '^match "([^"]+)" against expected:$'
-    table:
-      required: []
-    actions:
-      - process:
-          handler: 'MatchetypeProcessor'
-          operation: 'compare'
-          output: 'matchResult'
-          inputs:
-            resource: '$$1'
-            matchetype: '$row'
-            mode: '"complete"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Complete match comparison'
-          inputs:
-            actualstring: '$matchResult{severity}'
-            expectedstring: '"information"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Partial match: only check specified elements, extras allowed
-  - match: '^partially match "([^"]+)" against expected:$'
-    table:
-      required: []
-    actions:
-      - process:
-          handler: 'MatchetypeProcessor'
-          operation: 'compare'
-          output: 'matchResult'
-          inputs:
-            resource: '$$1'
-            matchetype: '$row'
-            mode: '"partial"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Partial match comparison'
-          inputs:
-            actualstring: '$matchResult{severity}'
-            expectedstring: '"information"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Match with inline JSON pattern (no table)
-  - match: '^match "([^"]+)" against pattern "([^"]+)"$'
-    actions:
-      - process:
-          handler: 'MatchetypeProcessor'
-          operation: 'compare'
-          output: 'matchResult'
-          inputs:
-            resource: '$$1'
-            matchetype: '"$2"'
-            mode: '"partial"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Match pattern comparison'
-          inputs:
-            actualstring: '$matchResult{severity}'
-            expectedstring: '"information"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Match the last submission against a pattern with wildcards
-  - match: '^the submission should match:$'
-    table:
-      required: []
-    actions:
-      - process:
-          handler: 'MatchetypeProcessor'
-          operation: 'compare'
-          output: 'matchResult'
-          inputs:
-            resource: '$submitResult{payload}'
-            matchetype: '$row'
-            mode: '"partial"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Submission match comparison'
-          inputs:
-            actualstring: '$matchResult{severity}'
-            expectedstring: '"information"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Match and capture the comparison result for further inspection
-  - match: '^compare "([^"]+)" against expected as "([A-Za-z_][A-Za-z0-9_]*)"$'
-    actions:
-      - process:
-          handler: 'MatchetypeProcessor'
-          operation: 'compare'
           output: '$2'
           inputs:
-            resource: '$$1'
-            matchetype: '$submitResult{payload}'
-            mode: '"partial"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
+            content: '$lastRequest{response}{body}'
+            pointer: '"$1"'
 
-  # ==================================================================
-  # TEST DATA GENERATION
-  # ==================================================================
-
-  # Generate a single resource from a profile
-  - match: '^generate test data from profile "([^"]+)"$'
+  # Assert a named variable equals an expected string value
+  # Accepts: "var" should be "val" OR the value of "var" should be "val"
+  - match: '^(?:the value of )?"([A-Za-z_][A-Za-z0-9_]*)" should be "([^"]+)"$'
     actions:
-      - process:
-          handler: 'TestDataGenerator'
-          operation: 'generate'
-          output: 'generatedResource'
-          inputs:
-            profile: '"$1"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Generate and save to a named variable
-  - match: '^generate test data from profile "([^"]+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
-    actions:
-      - process:
-          handler: 'TestDataGenerator'
-          operation: 'generate'
-          output: '$2'
-          inputs:
-            profile: '"$1"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # ------------------------------------------------------------------
-  # Define named mappings (reusable, primitive paths only)
-  # ------------------------------------------------------------------
-  - match: '^define mappings "([A-Za-z_][A-Za-z0-9_]*)":$'
-    table:
-      required: [path, expression]
-    actions:
-      - assign:
-          to: '$1'
-          value: []
-      - foreach:
-          from: '$tableRows'
-          do:
-            - listAppend:
-                list: '$1'
-                item:
-                  path: '$row.path'
-                  expression: '$row.expression'
-
-  # Define named mappings with parts for complex types (Identifier, HumanName, etc.)
-  - match: '^define mappings "([A-Za-z_][A-Za-z0-9_]*)" with parts:$'
-    table:
-      required: [path, part, expression]
-    actions:
-      - assign:
-          to: '$1'
-          value: []
-      - foreach:
-          from: '$tableRows'
-          do:
-            - listAppend:
-                list: '$1'
-                item:
-                  path: '$row.path'
-                  part: '$row.part'
-                  expression: '$row.expression'
-
-  # ------------------------------------------------------------------
-  # Define named data tables (reusable)
-  # ------------------------------------------------------------------
-  - match: '^define data "([A-Za-z_][A-Za-z0-9_]*)":$'
-    table:
-      required: []
-    actions:
-      - assign:
-          to: '$1'
-          value: []
-      - foreach:
-          from: '$tableRows'
-          do:
-            - listAppend:
-                list: '$1'
-                item: '$row'
-
-  # ------------------------------------------------------------------
-  # Generate using named mappings and named data
-  # ------------------------------------------------------------------
-  - match: '^generate test data from profile "([^"]+)" with mappings "([A-Za-z_][A-Za-z0-9_]*)" and data "([A-Za-z_][A-Za-z0-9_]*)"$'
-    actions:
-      - process:
-          handler: 'TestDataGenerator'
-          operation: 'generate'
-          output: 'generatedResource'
-          inputs:
-            profile: '"$1"'
-            mappings: '$$2'
-            data: '$$3'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Generate using named mappings and named data, save to a variable
-  - match: '^generate test data from profile "([^"]+)" with mappings "([A-Za-z_][A-Za-z0-9_]*)" and data "([A-Za-z_][A-Za-z0-9_]*)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
-    actions:
-      - process:
-          handler: 'TestDataGenerator'
-          operation: 'generate'
-          output: '$4'
-          inputs:
-            profile: '"$1"'
-            mappings: '$$2'
-            data: '$$3'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Generate with inline table where column headers are FHIR paths (mapping + data combined)
-  - match: '^generate test data from profile "([^"]+)" with:$'
-    table:
-      required: []
-    actions:
-      - assign:
-          to: 'testDataRows'
-          value: []
-      - foreach:
-          from: '$tableRows'
-          do:
-            - listAppend:
-                list: 'testDataRows'
-                item: '$row'
-      - process:
-          handler: 'TestDataGenerator'
-          operation: 'generateWithColumnMappings'
-          output: 'generatedResource'
-          inputs:
-            profile: '"$1"'
-            data: '$testDataRows'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Generate a Bundle using named data
-  - match: '^generate test bundle from profile "([^"]+)" with data "([A-Za-z_][A-Za-z0-9_]*)"$'
-    actions:
-      - process:
-          handler: 'TestDataGenerator'
-          operation: 'generateBundle'
-          output: 'generatedBundle'
-          inputs:
-            profile: '"$1"'
-            data: '$$2'
-            bundle: '"true"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Generate a Bundle using named mappings and named data
-  - match: '^generate test bundle from profile "([^"]+)" with mappings "([A-Za-z_][A-Za-z0-9_]*)" and data "([A-Za-z_][A-Za-z0-9_]*)"$'
-    actions:
-      - process:
-          handler: 'TestDataGenerator'
-          operation: 'generateBundle'
-          output: 'generatedBundle'
-          inputs:
-            profile: '"$1"'
-            mappings: '$$2'
-            data: '$$3'
-            bundle: '"true"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Generate and immediately validate
-  - match: '^generate and validate test data from profile "([^"]+)"$'
-    actions:
-      - process:
-          handler: 'TestDataGenerator'
-          operation: 'generate'
-          output: 'generatedResource'
-          inputs:
-            profile: '"$1"'
-      - process:
-          handler: 'FHIRValidator'
-          operation: 'validate'
-          output: 'validationOutcome'
-          inputs:
-            content: '$generatedResource'
-            profileUrl: '"$1"'
-      - process:
-          handler: 'ValidationResultsProcessor'
-          operation: 'summarize'
-          output: 'validationSummary'
-          inputs:
-            outcome: '$validationOutcome'
       - verify:
           handler: 'StringValidator'
-          desc: 'Generated test data validates'
+          desc: 'Verify variable value'
           inputs:
-            actualstring: '$validationSummary{errors}'
-            expectedstring: '"0"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
+            actualstring: '$$1'
+            expectedstring: '"$2"'
+
+  # ==================================================================
+  # Domain-specific steps are provided by component language extensions
+  # in public/components/<id>/steps.yml and merged at runtime.
+  # ==================================================================
 
   # ==================================================================
   # INLINE RESOURCE ASSIGNMENT (doc string support)
@@ -1351,146 +732,3 @@ steps:
           inputs:
             actualstring: '$$1'
             expectedstring: '"not-null"'
-
-  # ==================================================================
-  # RESOURCE TYPE ASSERTION
-  # ==================================================================
-
-  # Assert the resourceType of a named variable
-  - match: '^the "([^"]+)" resource type should be "([^"]+)"$'
-    actions:
-      - process:
-          handler: 'JsonPointerProcessor'
-          operation: 'process'
-          output: 'assertedResourceType'
-          inputs:
-            content: '$$1'
-            pointer: '"/resourceType"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify resource type'
-          inputs:
-            actualstring: '$assertedResourceType'
-            expectedstring: '"$2"'
-
-  # Assert the resourceType of the generated resource (shorthand)
-  - match: '^the generated resource type should be "([^"]+)"$'
-    actions:
-      - process:
-          handler: 'JsonPointerProcessor'
-          operation: 'process'
-          output: 'assertedResourceType'
-          inputs:
-            content: '$generatedResource'
-            pointer: '"/resourceType"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify generated resource type'
-          inputs:
-            actualstring: '$assertedResourceType'
-            expectedstring: '"$1"'
-
-  # ==================================================================
-  # MATCH WITH DOC STRING (inline JSON patterns)
-  # ==================================================================
-
-  # Partial match using inline JSON doc string as the expected pattern
-  - match: '^partially match "([^"]+)" against:$'
-    actions:
-      - process:
-          handler: 'MatchetypeProcessor'
-          operation: 'compare'
-          output: 'matchResult'
-          inputs:
-            resource: '$$1'
-            matchetype: '$docString'
-            mode: '"partial"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Partial match comparison'
-          inputs:
-            actualstring: '$matchResult{severity}'
-            expectedstring: '"information"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Complete match using inline JSON doc string
-  - match: '^exactly match "([^"]+)" against:$'
-    actions:
-      - process:
-          handler: 'MatchetypeProcessor'
-          operation: 'compare'
-          output: 'matchResult'
-          inputs:
-            resource: '$$1'
-            matchetype: '$docString'
-            mode: '"complete"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Complete match comparison'
-          inputs:
-            actualstring: '$matchResult{severity}'
-            expectedstring: '"information"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # ==================================================================
-  # MISMATCH DETECTION (expect failure)
-  # ==================================================================
-
-  # Assert that a match comparison produces errors (mismatch expected)
-  - match: '^"([^"]+)" should NOT match:$'
-    actions:
-      - process:
-          handler: 'MatchetypeProcessor'
-          operation: 'compare'
-          output: 'matchResult'
-          inputs:
-            resource: '$$1'
-            matchetype: '$docString'
-            mode: '"partial"'
-      - verify:
-          handler: 'ExpressionValidator'
-          desc: 'Correctly detected mismatch'
-          inputs:
-            expression: 'contains($matchResult, "error")'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # Assert mismatch using inline pattern string
-  - match: '^"([^"]+)" should not match pattern "([^"]+)"$'
-    actions:
-      - process:
-          handler: 'MatchetypeProcessor'
-          operation: 'compare'
-          output: 'matchResult'
-          inputs:
-            resource: '$$1'
-            matchetype: '"$2"'
-            mode: '"partial"'
-      - verify:
-          handler: 'ExpressionValidator'
-          desc: 'Correctly detected mismatch'
-          inputs:
-            expression: 'contains($matchResult, "error")'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # ==================================================================
-  # EXTRACT VALUE WITH JSON POINTER
-  # ==================================================================
-
-  # Extract a value from a resource using a JSON Pointer path
-  - match: '^extract "([^"]+)" from "([^"]+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
-    actions:
-      - process:
-          handler: 'JsonPointerProcessor'
-          operation: 'process'
-          output: '$3'
-          inputs:
-            content: '$$2'
-            pointer: '"$1"'

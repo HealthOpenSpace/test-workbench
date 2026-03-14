@@ -84,12 +84,24 @@ export class GITBValidator {
   private validateBasicStructure(xmlContent: string, errors: ValidationError[]): void {
     const isTestSuite = xmlContent.includes('<testsuite') || xmlContent.includes('<gitb:testsuite');
     const isTestCase = xmlContent.includes('<testcase') || xmlContent.includes('<gitb:testcase');
+    const isScriptlet = xmlContent.includes('<scriptlet') || xmlContent.includes('<gitb:scriptlet');
 
-    if (!isTestSuite && !isTestCase) {
+    if (!isTestSuite && !isTestCase && !isScriptlet) {
       errors.push({
-        message: 'Missing root element <testcase> or <testsuite>',
+        message: 'Missing root element <testcase>, <testsuite>, or <scriptlet>',
         type: 'error'
       });
+    }
+
+    // Scriptlets only require <steps> (and optionally <params>)
+    if (isScriptlet) {
+      if (!xmlContent.includes('<steps')) {
+        errors.push({
+          message: 'Missing required element <steps> in scriptlet',
+          type: 'error'
+        });
+      }
+      return;
     }
 
     // Both test suites and test cases require metadata and actors
@@ -121,7 +133,7 @@ export class GITBValidator {
 
   private validateRequiredAttributes(xmlContent: string, errors: ValidationError[]): void {
     // Check testcase or testsuite has ID
-    const rootMatch = xmlContent.match(/<(?:gitb:)?(?:testcase|testsuite)[^>]*>/);
+    const rootMatch = xmlContent.match(/<(?:gitb:)?(?:testcase|testsuite|scriptlet)[^>]*>/);
     if (rootMatch && !rootMatch[0].includes('id=')) {
       const tag = rootMatch[0].includes('testsuite') ? 'testsuite' : 'testcase';
       errors.push({

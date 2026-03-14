@@ -12,21 +12,33 @@ import {
   FileCode2,
   Code2,
   Database,
+  Rocket,
+  Settings,
+  Loader2,
+  ExternalLink,
+  Play,
+  Puzzle,
 } from 'lucide-react';
 import { Editor, EditorHandle } from './components/Editor';
 import { OutputPanel } from './components/OutputPanel';
 import { ModelSelector } from './components/ModelSelector';
 import { ExamplesPanel } from './components/ExamplesPanel';
 import { DataPoolsPanel } from './components/DataPoolsPanel';
+import { ComponentsPanel } from './components/ComponentsPanel';
 import { SnippetPalette } from './components/SnippetPalette';
 import { GherkinParser } from './parser/gherkinParser';
 import { XMLGenerator, XMLOutput } from './parser/xmlGenerator';
 import { dataModels, exampleMetas, loadExampleContent } from './data/models';
 import { validateTDL } from './validation/gitbValidator.ts';
+import { ITBSettingsDialog } from './components/ITBSettingsDialog';
+import {
+  ITBConfig, loadITBConfig, saveITBConfig, deployToITB, ITBDeployResult,
+  getITBAppUrl, resolveITBIds, getSpecificationActors, ensureSystem, ensureConformance, startTest, ITBTestResult,
+} from './services/itbClient';
 import { DataModel, ExampleScenario, ParsedScenario } from './types';
 import JSZip from 'jszip';
 
-type RightPanel = 'output' | 'examples' | 'datapools';
+type RightPanel = 'output' | 'examples' | 'datapools' | 'components';
 
 function App() {
   const [selectedModel, setSelectedModel] = useState<DataModel>(dataModels[0]);
@@ -39,6 +51,13 @@ function App() {
   });
   const [snippetsOpen, setSnippetsOpen] = useState(true);
   const [rightPanel, setRightPanel] = useState<RightPanel>('output');
+  const [itbConfig, setITBConfig] = useState<ITBConfig>(loadITBConfig);
+  const [itbSettingsOpen, setITBSettingsOpen] = useState(false);
+  const [deploying, setDeploying] = useState(false);
+  const [deployResult, setDeployResult] = useState<ITBDeployResult | null>(null);
+  const [runningTests, setRunningTests] = useState(false);
+  const [testResults, setTestResults] = useState<ITBTestResult[] | null>(null);
+  const [resolvedIds, setResolvedIds] = useState<Record<string, number | undefined>>({});
   const editorRef = useRef<EditorHandle>(null);
 
   // ── Parser & Generator ───────────────────────────────────────────
@@ -208,6 +227,115 @@ function App() {
     editorRef.current?.insertText(step);
   };
 
+  const handleITBConfigSave = (config: ITBConfig) => {
+    setITBConfig(config);
+    saveITBConfig(config);
+  };
+
+  const handleDeploy = async () => {
+    if (!xmlOutput) return;
+    setDeploying(true);
+    setDeployResult(null);
+    const result = await deployToITB(xmlOutput.files, itbConfig);
+    console.log('[ITB Deploy]', result);
+    // ITB returns { completed: true/false, errors: [...], warnings: [...] }
+    // Treat completed===false as failure even if HTTP was 200
+    if (result.success && result.details && result.details.completed === false) {
+      result.success = false;
+      result.message = 'ITB rejected the test suite.';
+    }
+    // Resolve numeric IDs for "Open in ITB" link before showing dialog
+    if (result.success && result.details) {
+      try {
+        // Find the SUT actor from the generated test suite XML
+        const suiteFile = xmlOutput?.files.find(f => f.type === 'testsuite');
+        const sutMatch = suiteFile?.xml.match(/actor id="([^"]+)"[^>]*role="SUT"/);
+        // Fallback: check test case files
+        const tcFile = xmlOutput?.files.find(f => f.type === 'testcase');
+        const sutMatch2 = tcFile?.xml.match(/actor id="([^"]+)"[^>]*role="SUT"/);
+        const sutActorId = sutMatch?.[1] || sutMatch2?.[1];
+        console.log('[ITB] SUT actor:', sutActorId);
+        const ids = await resolveITBIds(itbConfig, result.details, sutActorId);
+        console.log('[ITB] Resolved IDs:', ids);
+        setResolvedIds(ids);
+
+        // Auto-create conformance so test cases appear in ITB UI
+        try {
+          const actors = await getSpecificationActors(itbConfig);
+          const sutActorInfo = actors.find((a: any) => a.actorId === sutActorId) || actors.find((a: any) => a.default) || actors[0];
+          if (sutActorInfo?.apiKey) {
+            const systemApiKey = await ensureSystem(itbConfig);
+            if (systemApiKey) {
+              const ok = await ensureConformance(itbConfig, systemApiKey, sutActorInfo.apiKey);
+              console.log('[ITB] Conformance:', ok ? 'created/verified' : 'failed');
+            }
+          }
+        } catch (err) {
+          console.warn('[ITB] Auto-conformance failed:', err);
+        }
+      } catch (err) {
+        console.warn('[ITB] Failed to resolve IDs:', err);
+      }
+    }
+
+    setDeployResult(result);
+    setDeploying(false);
+  };
+
+  const handleRunTests = async () => {
+    if (!xmlOutput) return;
+    setRunningTests(true);
+    setTestResults(null);
+    try {
+      // Get actors for the specification
+      const actors = await getSpecificationActors(itbConfig);
+      if (actors.length === 0) {
+        setTestResults([{ message: 'No actors found for the specification. Deploy first.' }]);
+        setRunningTests(false);
+        return;
+      }
+
+      // Find the SUT actor (role=SUT) or first actor
+      const sutActor = actors.find((a: any) => a.default) || actors[0];
+      const actorApiKey = sutActor.apiKey;
+
+      // Ensure system exists
+      const systemApiKey = await ensureSystem(itbConfig);
+      if (!systemApiKey) {
+        setTestResults([{ message: 'Could not create/find a test system. Check ITB configuration.' }]);
+        setRunningTests(false);
+        return;
+      }
+
+      // Ensure conformance
+      await ensureConformance(itbConfig, systemApiKey, actorApiKey);
+
+      // Find test case IDs from the generated XML
+      const testCaseIds = xmlOutput.files
+        .filter(f => f.type === 'testcase')
+        .map(f => f.filename.replace(/\.xml$/, ''));
+
+      if (testCaseIds.length === 0) {
+        setTestResults([{ message: 'No test cases found to execute.' }]);
+        setRunningTests(false);
+        return;
+      }
+
+      const results = await startTest(itbConfig, testCaseIds, systemApiKey, actorApiKey);
+      setTestResults(results);
+
+      // Save system API key for reuse
+      if (systemApiKey !== itbConfig.systemApiKey) {
+        const updated = { ...itbConfig, systemApiKey };
+        setITBConfig(updated);
+        saveITBConfig(updated);
+      }
+    } catch (err: any) {
+      setTestResults([{ message: `Error: ${err?.message || err}` }]);
+    }
+    setRunningTests(false);
+  };
+
   const errorCount = issues.filter(e => e.severity === 'error').length;
   const warnCount = issues.filter(e => e.severity === 'warning').length;
   const scenarioCount = (parsedScenario as any)?.__scenarios?.length ?? 0;
@@ -271,6 +399,26 @@ function App() {
             <button onClick={handleDownloadXML} disabled={!xmlOutput || errorCount > 0} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 transition-colors">
               <Download size={14} /> ZIP
             </button>
+
+            {/* Deploy to ITB */}
+            <div className="border-l border-gray-200 dark:border-slate-600 mx-1 h-5" />
+            <button
+              onClick={handleDeploy}
+              disabled={!xmlOutput || errorCount > 0 || deploying}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 transition-colors"
+              title={`Deploy to ITB at ${itbConfig.baseUrl}`}
+            >
+              {deploying ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />}
+              {deploying ? 'Deploying...' : 'Deploy'}
+            </button>
+            <button
+              onClick={() => setITBSettingsOpen(true)}
+              className="p-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-md hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors"
+              title="ITB Settings"
+            >
+              <Settings size={16} />
+            </button>
+
             <button onClick={() => setIsDark(!isDark)} className="p-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-md hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors" title={isDark ? 'Light mode' : 'Dark mode'}>
               {isDark ? <Sun size={16} /> : <Moon size={16} />}
             </button>
@@ -360,6 +508,16 @@ function App() {
             >
               <Database size={14} /> Data Pools
             </button>
+            <button
+              onClick={() => setRightPanel('components')}
+              className={`px-4 py-2 text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                rightPanel === 'components'
+                  ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-500'
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+              }`}
+            >
+              <Puzzle size={14} /> Components
+            </button>
           </div>
 
           {/* Right panel content */}
@@ -376,6 +534,8 @@ function App() {
                 onInsertPoolStep={handleInsertPoolStep}
                 isDark={isDark}
               />
+            ) : rightPanel === 'components' ? (
+              <ComponentsPanel isDark={isDark} />
             ) : (
               <ExamplesPanel
                 examples={loadedExamples}
@@ -386,6 +546,146 @@ function App() {
           </div>
         </div>
       </div>
+
+      {/* ITB Settings Dialog */}
+      {itbSettingsOpen && (
+        <ITBSettingsDialog
+          config={itbConfig}
+          onSave={handleITBConfigSave}
+          onClose={() => setITBSettingsOpen(false)}
+        />
+      )}
+
+      {/* Deploy Report Panel */}
+      {deployResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setDeployResult(null)}>
+          <div
+            className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className={`flex items-center gap-2 px-5 py-3 rounded-t-xl ${
+              deployResult.success
+                ? 'bg-green-50 dark:bg-green-900/30 text-green-800 dark:text-green-200'
+                : 'bg-red-50 dark:bg-red-900/30 text-red-800 dark:text-red-200'
+            }`}>
+              {deployResult.success ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
+              <h3 className="font-semibold text-base flex-1">
+                {deployResult.success ? 'Deploy Successful' : 'Deploy Failed'}
+              </h3>
+              <button onClick={() => setDeployResult(null)} className="text-current opacity-50 hover:opacity-100 text-lg">&times;</button>
+            </div>
+
+            {/* Body */}
+            <div className="px-5 py-4 overflow-auto flex-1 space-y-3">
+              {/* Status */}
+              <p className="text-sm text-gray-700 dark:text-gray-300">{deployResult.message}</p>
+              {deployResult.url && (
+                <p className="text-xs text-gray-400 font-mono">POST {deployResult.url}</p>
+              )}
+
+              {/* Errors */}
+              {deployResult.details?.errors?.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-semibold text-red-700 dark:text-red-400 mb-1 uppercase tracking-wider">
+                    Errors ({deployResult.details.errors.length})
+                  </h4>
+                  <div className="space-y-1">
+                    {deployResult.details.errors.map((err: any, i: number) => (
+                      <div key={i} className="px-3 py-2 bg-red-50 dark:bg-red-900/20 rounded text-xs text-red-800 dark:text-red-300">
+                        <span className="font-medium">{err.description}</span>
+                        {err.location && <span className="ml-2 opacity-60">in {err.location}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Warnings */}
+              {deployResult.details?.warnings?.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-semibold text-yellow-700 dark:text-yellow-400 mb-1 uppercase tracking-wider">
+                    Warnings ({deployResult.details.warnings.length})
+                  </h4>
+                  <div className="space-y-1">
+                    {deployResult.details.warnings.map((warn: any, i: number) => (
+                      <div key={i} className="px-3 py-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-800 dark:text-yellow-300">
+                        {warn.description}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Raw response (fallback if no structured errors/warnings) */}
+              {deployResult.details && !deployResult.details.errors && !deployResult.details.warnings && (
+                <div>
+                  <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Response</h4>
+                  <pre className="text-xs bg-gray-50 dark:bg-slate-900 rounded p-3 overflow-auto max-h-48 text-gray-700 dark:text-gray-300 font-mono whitespace-pre-wrap break-all">
+                    {typeof deployResult.details === 'string' ? deployResult.details : JSON.stringify(deployResult.details, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </div>
+
+            {/* Test Results */}
+            {testResults && (
+              <div className="px-5 py-3 border-t border-gray-200 dark:border-slate-700">
+                <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wider">
+                  Test Results
+                </h4>
+                <div className="space-y-1">
+                  {testResults.map((tr, i) => (
+                    <div key={i} className={`px-3 py-2 rounded text-xs ${
+                      tr.result === 'SUCCESS'
+                        ? 'bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-300'
+                        : tr.result === 'FAILURE'
+                        ? 'bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-300'
+                        : 'bg-gray-50 dark:bg-slate-900 text-gray-700 dark:text-gray-300'
+                    }`}>
+                      {tr.result && <span className="font-semibold mr-1">{tr.result}</span>}
+                      {tr.message}
+                      {tr.sessionId && <span className="ml-2 opacity-50">({tr.sessionId.substring(0, 8)}...)</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Footer */}
+            <div className="px-5 py-3 border-t border-gray-200 dark:border-slate-700 flex items-center gap-2">
+              {deployResult.success && (
+                <>
+                  <a
+                    href={getITBAppUrl(itbConfig, resolvedIds)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                    title={getITBAppUrl(itbConfig, resolvedIds)}
+                  >
+                    <ExternalLink size={14} /> Open in ITB
+                  </a>
+                  <button
+                    onClick={handleRunTests}
+                    disabled={runningTests}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 transition-colors"
+                  >
+                    {runningTests ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                    {runningTests ? 'Running...' : 'Run Tests'}
+                  </button>
+                </>
+              )}
+              <div className="flex-1" />
+              <button
+                onClick={() => { setDeployResult(null); setTestResults(null); setResolvedIds({}); }}
+                className="px-4 py-2 text-xs font-medium rounded-lg bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-slate-600 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

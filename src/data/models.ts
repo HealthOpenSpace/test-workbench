@@ -420,7 +420,11 @@ export interface ExampleMeta {
 }
 
 export const exampleMetas: ExampleMeta[] = [
+  // VHL (default)
+  { id: 'vhl-integration',       name: 'VHL Integration',               description: 'End-to-end VHL QR code validation, COSE signature verification, and FHIR Bundle validation', dataModel: 'fhir', featureFile: 'vhl-integration.feature' },
+
   // FHIR
+  { id: 'server',                 name: 'Server Allergy Flows',          description: 'FHIR server allergy registration, validation, and rejection flows',  dataModel: 'fhir', featureFile: 'server.feature' },
   { id: 'validate-patient',       name: 'Validate Patient',              description: 'Basic FHIR Patient resource validation',                            dataModel: 'fhir' },
   { id: 'create-observation',     name: 'Create Observation',            description: 'Create and validate FHIR Observation',                               dataModel: 'fhir' },
   { id: 'be-patient',             name: 'Belgian Patient (be-patient)',  description: 'End-to-end: load IG, generate BePatient with SSIN/MRN, validate, matchetype, FHIRPath', dataModel: 'fhir' },

@@ -35,17 +35,21 @@ function parseDocString(lines: string[], startIdx: number): { text: string; endI
   return { text: contentLines.join('\n'), endIdx: j };
 }
 
-import { loadCatalog, Catalog, CatalogAction } from './languageCatalog';
+import { loadCatalog, Catalog, CatalogAction, loadAllComponents, mergeCatalog, ComponentInfo } from './languageCatalog';
 
 
 export type IRAction =
   | { type: 'call', path: string, output?: string, from?: string, to?: string, inputs?: Record<string,string> }
+  | { type: 'send', id?: string, desc?: string, handler: string, from?: string, to?: string, inputs: Record<string,string> }
   | { type: 'verify', handler: string, desc?: string, inputs: Record<string,string> }
   | { type: 'process', handler: string, operation: string, output?: string, from?: string, to?: string, inputs: Record<string,string>, hidden?: boolean }
-  | { type: 'assign', to: string, value: string }
+  | { type: 'assign', to: string, value: string, append?: boolean }
+  | { type: 'log', value: string }
   | { type: 'listAppend', list: string, item: Record<string,string> }
   | { type: 'foreach', from: string, do: IRAction[] }
-  | { type: 'declareActor', id: string, name?: string, role?: string, endpoint?: string, canonical?: string };
+  | { type: 'declareActor', id: string, name?: string, role?: string, endpoint?: string, canonical?: string }
+  | { type: 'declareVariable', name: string, varType: string, value?: string }
+  | { type: 'interact', id?: string, desc?: string, inputTitle?: string, requests: { desc: string, name?: string, inputType?: string, required?: boolean, variable: string }[] };
 
 
 type ServicesMap = Record<string, string>; // { "FHIR-validator": "1.2.0", "Monitor": "2.1.0" }
@@ -55,7 +59,8 @@ export class GherkinParser {
   private catalog?: Catalog;
   private model?: DataModel;
   private services: ServicesMap;
-  private strictRequirements: boolean;  
+  private strictRequirements: boolean;
+  private components: ComponentInfo[] = [];
 
   constructor(model?: DataModel, options?: { services?: ServicesMap; strictRequirements?: boolean }) {
     this.model = model;
@@ -63,9 +68,18 @@ export class GherkinParser {
     this.strictRequirements = options?.strictRequirements ?? false; // warning by default
   }
 
-  /** Loads /lang/en.yml once */
+  /** Loads /lang/en.yml + enabled component extensions, merges them */
   async ensureCatalog(locale='en') {
-    if (!this.catalog) this.catalog = await loadCatalog(locale);
+    if (!this.catalog) {
+      const core = await loadCatalog(locale);
+      this.components = await loadAllComponents();
+      this.catalog = mergeCatalog(core, this.components);
+    }
+  }
+
+  /** Get loaded components (available after ensureCatalog) */
+  getComponents(): ComponentInfo[] {
+    return this.components;
   }
 
   /** Basic Gherkin parser: Feature/Scenarios/Steps (+ DataTables) -> ParsedFeature
@@ -325,11 +339,15 @@ function splitRow(line: string): string[] {
 
 function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
   const out: IRAction[] = [];
+  // For steps with a table but no foreach, make the first row available as $row
+  if (!ctx._row && ctx.tableRows?.length > 0) {
+    ctx._row = ctx.tableRows[0];
+  }
   const subst = (v: any): any =>
     typeof v === 'string'
       ? v.replace(/\$docString/g, () => ctx.docString ?? '')
            .replace(/\$([0-9]+)/g, (_: any, i: string) => ctx.groups[Number(i)-1] ?? '')
-           .replace(/\$row\.([A-Za-z0-9_]+)/g, (_: any, k: string) => ctx._row?.[k] ?? '')
+           .replace(/\$row\.([A-Za-z0-9_.]+)/g, (_: any, k: string) => ctx._row?.[k] ?? '')
       : v;
 
   const visit = (a: any) => {
@@ -351,9 +369,18 @@ function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
       out.push({ type: 'declareActor', id: subst(clone.declareActor.id), name: subst(clone.declareActor.name ?? ''), role: subst(clone.declareActor.role ?? ''), endpoint: subst(clone.declareActor.endpoint ?? ''), canonical: subst(clone.declareActor.canonical ?? '') });
       return;
     }
+    if (clone.send) {
+      for (const k in clone.send.inputs) clone.send.inputs[k] = subst(clone.send.inputs[k]);
+      out.push({ type: 'send', id: subst(clone.send.id ?? ''), desc: subst(clone.send.desc ?? ''), handler: clone.send.handler, from: subst(clone.send.from ?? ''), to: subst(clone.send.to ?? ''), inputs: clone.send.inputs });
+      return;
+    }
+    if (clone.log) {
+      out.push({ type: 'log', value: subst(typeof clone.log === 'string' ? clone.log : clone.log.value) });
+      return;
+    }
     if (clone.call) {
       if (clone.call.inputs) for (const k in clone.call.inputs) clone.call.inputs[k] = subst(clone.call.inputs[k]);
-      out.push({ type: 'call', path: clone.call.path, output: clone.call.output, from: subst(clone.call.from ?? ''), to: subst(clone.call.to ?? ''), inputs: clone.call.inputs });
+      out.push({ type: 'call', path: clone.call.path, output: clone.call.output ? subst(clone.call.output) : undefined, from: subst(clone.call.from ?? ''), to: subst(clone.call.to ?? ''), inputs: clone.call.inputs });
       return;
     }
     if (clone.verify) {
@@ -363,18 +390,33 @@ function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
     }
     if (clone.process) {
       for (const k in clone.process.inputs) clone.process.inputs[k] = subst(clone.process.inputs[k]);
-      out.push({ type: 'process', handler: clone.process.handler, operation: clone.process.operation, output: clone.process.output, from: clone.process.from ? subst(clone.process.from) : undefined, to: clone.process.to ? subst(clone.process.to) : undefined, inputs: clone.process.inputs, hidden: clone.process.hidden });
+      out.push({ type: 'process', handler: clone.process.handler, operation: clone.process.operation, output: clone.process.output ? subst(clone.process.output) : undefined, from: clone.process.from ? subst(clone.process.from) : undefined, to: clone.process.to ? subst(clone.process.to) : undefined, inputs: clone.process.inputs, hidden: clone.process.hidden });
       return;
     }
     if (clone.assign) {
       clone.assign.value = subst(clone.assign.value);
-      out.push({ type: 'assign', to: clone.assign.to, value: clone.assign.value });
+      out.push({ type: 'assign', to: subst(clone.assign.to), value: typeof clone.assign.value === 'string' ? clone.assign.value : JSON.stringify(clone.assign.value), append: clone.assign.append });
       return;
     }
     if (clone.listAppend) {
       const item: Record<string,string> = {};
       for (const k in clone.listAppend.item) item[k] = subst(clone.listAppend.item[k]);
-      out.push({ type: 'listAppend', list: clone.listAppend.list, item });
+      out.push({ type: 'listAppend', list: subst(clone.listAppend.list), item });
+      return;
+    }
+    if (clone.declareVariable) {
+      out.push({ type: 'declareVariable', name: subst(clone.declareVariable.name), varType: subst(clone.declareVariable.varType ?? 'string'), value: clone.declareVariable.value != null ? subst(clone.declareVariable.value) : undefined });
+      return;
+    }
+    if (clone.interact) {
+      const requests = (clone.interact.requests || []).map((r: any) => ({
+        desc: subst(r.desc ?? ''),
+        name: subst(r.name ?? ''),
+        inputType: r.inputType,
+        required: r.required,
+        variable: subst(r.variable ?? '')
+      }));
+      out.push({ type: 'interact', id: subst(clone.interact.id ?? ''), desc: subst(clone.interact.desc ?? ''), inputTitle: subst(clone.interact.inputTitle ?? ''), requests });
       return;
     }
   };
