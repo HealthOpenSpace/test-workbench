@@ -315,6 +315,24 @@ steps:
             actualnumber: '$lastRequest{response}{status}'
             expectednumber: '"$1"'
 
+  # Accept multiple status codes with "or": the response status should be "422" or "400" or "500"
+  # Also supports list syntax: the response status should be in ["422", "400", "500"]
+  - match: '^the response status should be ("[0-9]{3}"(?:\s+or\s+"[0-9]{3}")*)$'
+    actions:
+      - verify:
+          handler: 'ExpressionValidator'
+          desc: 'Verify HTTP response status is one of expected values'
+          inputs:
+            expression: '$statusOrExpr'
+
+  - match: '^the response status should be in \[("[0-9]{3}"(?:\s*,\s*"[0-9]{3}")*)\]$'
+    actions:
+      - verify:
+          handler: 'ExpressionValidator'
+          desc: 'Verify HTTP response status is one of expected values'
+          inputs:
+            expression: '$statusOrExpr'
+
   - match: '^the OperationOutcome at "(.+)" should be "(.+)"$'
     actions:
       - process:
@@ -540,6 +558,8 @@ steps:
   # ------------------------------------------------------------------
 
   # Actor calls Actor at "/path" with: (docstring body) — JSON POST
+  # If the docstring contains $var references, the parser auto-generates
+  # TemplateProcessor steps to interpolate them before the send.
   - match: '^([A-Za-z][A-Za-z0-9_]*) calls ([A-Za-z][A-Za-z0-9_]*) at "([^"]+)" with:$'
     actions:
       - assign:

@@ -58,11 +58,21 @@ export interface ComponentManifest {
   };
   actors?: { id: string; description?: string }[];
   language?: string; // relative path to steps.yml
+  scriptlets?: string[]; // list of scriptlet XML files shipped with this component
+}
+
+/** A scriptlet XML file shipped with a component */
+export interface ComponentScriptlet {
+  /** Path relative to the test suite root, e.g. "scriptlets/buildJsonBody.xml" */
+  path: string;
+  /** Raw XML content */
+  xml: string;
 }
 
 export interface ComponentInfo {
   manifest: ComponentManifest;
   extension?: ExtensionCatalog;
+  scriptlets?: ComponentScriptlet[];
   enabled: boolean;
   status: 'unknown' | 'healthy' | 'unhealthy' | 'checking';
 }
@@ -133,11 +143,26 @@ export async function loadAllComponents(): Promise<ComponentInfo[]> {
       extension = await loadComponentExtension(id, manifest.language);
     }
 
+    // Load scriptlet XML files shipped with this component
+    const scriptlets: ComponentScriptlet[] = [];
+    if (manifest.scriptlets) {
+      for (const file of manifest.scriptlets) {
+        try {
+          const url = `${base()}components/${id}/scriptlets/${file}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const xml = await res.text();
+            scriptlets.push({ path: `scriptlets/${file}`, xml });
+          }
+        } catch { /* skip unavailable scriptlets */ }
+      }
+    }
+
     // Check localStorage for enabled state (default: enabled)
     const stored = localStorage.getItem(`component:${id}:enabled`);
     const enabled = stored !== null ? stored === 'true' : true;
 
-    results.push({ manifest, extension: extension ?? undefined, enabled, status: 'unknown' });
+    results.push({ manifest, extension: extension ?? undefined, scriptlets: scriptlets.length > 0 ? scriptlets : undefined, enabled, status: 'unknown' });
   }
 
   return results;

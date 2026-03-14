@@ -1,6 +1,7 @@
 // xmlGenerator.ts
 import type { ParsedScenario } from '../types';
 import type { IRAction } from './gherkinParser';
+import type { ComponentScriptlet } from './languageCatalog';
 
 export interface GeneratedFile {
   filename: string;
@@ -19,6 +20,18 @@ export interface XMLOutput {
 
 export class XMLGenerator {
   constructor(private parser: any) {}
+
+  /** Collect all scriptlets from enabled components loaded by the parser */
+  private getComponentScriptlets(): ComponentScriptlet[] {
+    const components = this.parser?.getComponents?.() ?? [];
+    const scriptlets: ComponentScriptlet[] = [];
+    for (const comp of components) {
+      if (comp.enabled && comp.scriptlets) {
+        scriptlets.push(...comp.scriptlets);
+      }
+    }
+    return scriptlets;
+  }
 
   generate(parsed: ParsedScenario): XMLOutput {
     const featureTitle = (parsed as any).__featureTitle ?? (parsed.scenario as any).feature ?? 'Feature';
@@ -120,8 +133,8 @@ ${testcaseRefs}
       name: featureTitle
     });
 
-    // Generate scriptlet stubs for all <call path="scriptlets/..."> references
-    const scriptletFiles = generateScriptlets(scenarios);
+    // Generate scriptlet files: use real component scriptlets when available, stubs otherwise
+    const scriptletFiles = generateScriptlets(scenarios, this.getComponentScriptlets());
     files.push(...scriptletFiles);
 
     // Combined preview: test suite + all test cases separated by comments
@@ -169,6 +182,14 @@ function collectVariables(ir: IRAction[]): DeclaredVariable[] {
     if (a.type === 'process' && a.output && !seen.has(a.output)) {
       seen.add(a.output);
       vars.push({ name: a.output, varType: 'string' });
+    }
+  }
+
+  // 2b. Variables created by <call output="varName"> — scriptlet output
+  for (const a of ir) {
+    if (a.type === 'call' && a.output && !seen.has(a.output)) {
+      seen.add(a.output);
+      vars.push({ name: a.output, varType: 'map' });
     }
   }
 
@@ -445,7 +466,10 @@ function collectScriptletCalls(ir: IRAction[]): Map<string, Set<string>> {
  * Generate stub scriptlet XML files for all referenced scriptlet paths.
  * Each scriptlet is a minimal valid TDL scriptlet that declares its inputs.
  */
-function generateScriptlets(scenarios: { name: string; ir: IRAction[] }[]): GeneratedFile[] {
+function generateScriptlets(
+  scenarios: { name: string; ir: IRAction[] }[],
+  componentScriptlets: ComponentScriptlet[] = [],
+): GeneratedFile[] {
   // Merge scriptlet calls across all scenarios
   const allCalls = new Map<string, Set<string>>();
   for (const sc of scenarios) {
@@ -456,14 +480,35 @@ function generateScriptlets(scenarios: { name: string; ir: IRAction[] }[]): Gene
     }
   }
 
+  // Index real component scriptlets by path
+  const realScriptlets = new Map<string, ComponentScriptlet>();
+  for (const s of componentScriptlets) {
+    realScriptlets.set(s.path, s);
+  }
+
   const files: GeneratedFile[] = [];
+
+  // For each referenced scriptlet path, use real XML if available, otherwise generate a stub
   for (const [path, inputNames] of allCalls) {
     const scriptletId = path.replace(/^scriptlets\//, '').replace(/\.xml$/, '');
-    const inputsXml = [...inputNames]
-      .map(name => `    <var name="${escapeAttr(name)}" type="string"/>`)
-      .join('\n');
+    const real = realScriptlets.get(path);
 
-    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+    if (real) {
+      // Use the real scriptlet XML from the component
+      files.push({
+        filename: path,
+        xml: real.xml,
+        type: 'scriptlet',
+        id: scriptletId,
+        name: scriptletId,
+      });
+    } else {
+      // Generate a stub scriptlet
+      const inputsXml = [...inputNames]
+        .map(name => `    <var name="${escapeAttr(name)}" type="string"/>`)
+        .join('\n');
+
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <scriptlet id="${escapeAttr(scriptletId)}"
             xmlns="http://www.gitb.com/tdl/v1/"
             xmlns:gitb="http://www.gitb.com/core/v1/">
@@ -475,13 +520,29 @@ ${inputsXml}
   </steps>
 </scriptlet>`;
 
-    files.push({
-      filename: path, // e.g. "scriptlets/instructUser.xml"
-      xml,
-      type: 'scriptlet',
-      id: scriptletId,
-      name: scriptletId,
-    });
+      files.push({
+        filename: path,
+        xml,
+        type: 'scriptlet',
+        id: scriptletId,
+        name: scriptletId,
+      });
+    }
+  }
+
+  // Also include any component scriptlets that weren't directly referenced
+  // (they may be called by other scriptlets or useful for future steps)
+  for (const s of componentScriptlets) {
+    if (!allCalls.has(s.path)) {
+      const scriptletId = s.path.replace(/^scriptlets\//, '').replace(/\.xml$/, '');
+      files.push({
+        filename: s.path,
+        xml: s.xml,
+        type: 'scriptlet',
+        id: scriptletId,
+        name: scriptletId,
+      });
+    }
   }
 
   return files;

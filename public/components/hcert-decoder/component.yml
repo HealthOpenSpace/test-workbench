@@ -33,3 +33,10 @@ actors:
 
 # Language extension — loaded and merged into the step catalog
 language: steps.yml
+
+# Scriptlets — reusable TDL XML functions included in generated test suites
+# (kept for reference / future use by other features)
+scriptlets:
+  - buildJsonBody.xml
+  - multipartUpload.xml
+  - postJson.xml

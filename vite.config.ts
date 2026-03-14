@@ -35,7 +35,7 @@ function itbIdResolver(): Plugin {
           `.replace(/\n/g, ' ');
 
           const raw = execSync(
-            `docker exec itb-gitb-mysql-1 mysql -u root -proot gitb -N -e "${sql}"`,
+            `docker exec itb-gitb-mysql-1 mysql -u root -proot gitb -N -e "${sql}" 2>/dev/null`,
             { encoding: 'utf-8', timeout: 5000 }
           );
 
@@ -56,7 +56,7 @@ function itbIdResolver(): Plugin {
           const dbQuery = (sql: string) => {
             try {
               return execSync(
-                `docker exec itb-gitb-mysql-1 mysql -u root -proot gitb -N -e "${sql}"`,
+                `docker exec itb-gitb-mysql-1 mysql -u root -proot gitb -N -e "${sql}" 2>/dev/null`,
                 { encoding: 'utf-8', timeout: 3000 }
               ).trim();
             } catch { return ''; }

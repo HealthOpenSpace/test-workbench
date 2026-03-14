@@ -337,18 +337,137 @@ function splitRow(line: string): string[] {
   return cells.map(c => c.trim());
 }
 
+/**
+ * Post-process IR actions: when a send action's body input contains a JSON string
+ * with embedded $varName references (from a Gherkin docstring), expand it into
+ * TemplateProcessor + assign actions. This produces proper JSON escaping via freemarker.
+ *
+ * Before:
+ *   send { body: '{"qr_data":"$rawQRData","include_raw":true}' }
+ *
+ * After:
+ *   assign to="docTplParams{rawQRData}" value="$rawQRData"
+ *   assign to="docTpl" value='{"qr_data":"${rawQRData?json_string}","include_raw":true}'
+ *   process handler="TemplateProcessor" operation="process" output="docBody" ...
+ *   send { body: '$docBody' }
+ */
+function expandDocStringTemplates(ir: IRAction[]): IRAction[] {
+  const result: IRAction[] = [];
+  let tplCounter = 0;
+
+  for (const action of ir) {
+    if (action.type !== 'send' || !action.inputs?.body) {
+      result.push(action);
+      continue;
+    }
+
+    const body = action.inputs.body;
+    // Detect: body contains JSON with $varName references (not already a $variable or expression)
+    const varRefRegex = /\$([a-zA-Z_]\w*)/g;
+    // Only expand if body looks like a JSON literal with embedded $var refs
+    // (starts with { and contains $varName that isn't $docString or $$actorBase patterns)
+    const trimmed = body.trim();
+    if (!trimmed.startsWith('{') || !varRefRegex.test(trimmed)) {
+      result.push(action);
+      continue;
+    }
+
+    // Collect unique variable references
+    const vars = new Set<string>();
+    let m;
+    const re = /\$([a-zA-Z_]\w*)/g;
+    while ((m = re.exec(trimmed)) !== null) {
+      vars.add(m[1]);
+    }
+
+    if (vars.size === 0) {
+      result.push(action);
+      continue;
+    }
+
+    tplCounter++;
+    const paramsVar = `docTplParams${tplCounter > 1 ? tplCounter : ''}`;
+    const tplVar = `docTpl${tplCounter > 1 ? tplCounter : ''}`;
+    const bodyVar = `docBody${tplCounter > 1 ? tplCounter : ''}`;
+
+    // Generate assign actions for template parameters
+    for (const varName of vars) {
+      result.push({
+        type: 'assign',
+        to: `${paramsVar}{${varName}}`,
+        value: `$${varName}`,
+      });
+    }
+
+    // Build freemarker template: replace $varName with ${varName?json_string}
+    // But if the $var is already inside quotes (JSON value), use ?json_string
+    // If not inside quotes (raw JSON fragment), just use ${varName}
+    let tplString = trimmed;
+    for (const varName of vars) {
+      // Check if $varName appears inside double-quoted JSON values: "...$varName..."
+      // If so, use ?json_string for safe escaping
+      // Simple heuristic: if preceded by " (possibly with other chars), it's a quoted value
+      tplString = tplString.replace(
+        new RegExp(`\\$${varName}`, 'g'),
+        `\${${varName}?json_string}`
+      );
+    }
+
+    // Assign the template string (single-quoted for TDL)
+    result.push({
+      type: 'assign',
+      to: tplVar,
+      value: `'${tplString}'`,
+    });
+
+    // Process via TemplateProcessor
+    result.push({
+      type: 'process',
+      handler: 'TemplateProcessor',
+      operation: 'process',
+      output: bodyVar,
+      inputs: {
+        syntax: '"freemarker"',
+        template: `$${tplVar}`,
+        parameters: `$${paramsVar}`,
+      },
+    });
+
+    // Replace body in the send action
+    const newInputs = { ...action.inputs, body: `$${bodyVar}` };
+    result.push({ ...action, inputs: newInputs });
+  }
+
+  return result;
+}
+
 function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
   const out: IRAction[] = [];
   // For steps with a table but no foreach, make the first row available as $row
   if (!ctx._row && ctx.tableRows?.length > 0) {
     ctx._row = ctx.tableRows[0];
   }
-  const subst = (v: any): any =>
-    typeof v === 'string'
-      ? v.replace(/\$docString/g, () => ctx.docString ?? '')
-           .replace(/\$([0-9]+)/g, (_: any, i: string) => ctx.groups[Number(i)-1] ?? '')
-           .replace(/\$row\.([A-Za-z0-9_.]+)/g, (_: any, k: string) => ctx._row?.[k] ?? '')
-      : v;
+  const subst = (v: any): any => {
+    if (typeof v !== 'string') return v;
+    let result = v
+      .replace(/\$docString/g, () => ctx.docString ?? '')
+      .replace(/\$([0-9]+)/g, (_: any, i: string) => ctx.groups[Number(i)-1] ?? '')
+      .replace(/\$row\.([A-Za-z0-9_.]+)/g, (_: any, k: string) => ctx._row?.[k] ?? '');
+
+    // Build dynamic OR expression for status code checks
+    // $statusOrExpr → parses status codes from $1 (which contains "422" or "400" or "500" or "422", "400")
+    if (result.includes('$statusOrExpr')) {
+      const raw = ctx.groups[0] ?? '';
+      // Extract all 3-digit codes from patterns like: "422" or "400" or "500"  OR  "422", "400"
+      const codes = [...raw.matchAll(/"(\d{3})"/g)].map(m => m[1]);
+      const expr = codes
+        .map(c => `($lastRequest{response}{status} = "${c}")`)
+        .join(' or ');
+      result = result.replace(/\$statusOrExpr/g, expr || '"false"');
+    }
+
+    return result;
+  };
 
   const visit = (a: any) => {
     const clone = JSON.parse(JSON.stringify(a));
@@ -422,7 +541,11 @@ function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
   };
 
   actions.forEach(visit);
-  return out;
+
+  // Post-processing: when a send action's body contains JSON with $var references
+  // (from a docstring), expand it into TemplateProcessor + assign chain.
+  // This ensures proper JSON escaping via freemarker ?json_string.
+  return expandDocStringTemplates(out);
 }
 
 /** Semver helpers (very small, supports >=, >, =, <=, < with x.y[.z]) */
