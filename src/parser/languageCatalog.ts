@@ -23,6 +23,8 @@ export interface CatalogStep {
   table?: { required: string[] };
   actions: CatalogAction[];
   requires?: CatalogRequirement | CatalogRequirement[];
+  /** Which component provided this step (undefined = core language) */
+  _source?: { componentId: string; componentName: string; enabled: boolean };
 }
 
 export interface Catalog {
@@ -58,11 +60,21 @@ export interface ComponentManifest {
   };
   actors?: { id: string; description?: string }[];
   language?: string; // relative path to steps.yml
+  scriptlets?: string[]; // list of scriptlet XML files shipped with this component
+}
+
+/** A scriptlet XML file shipped with a component */
+export interface ComponentScriptlet {
+  /** Path relative to the test suite root, e.g. "scriptlets/buildJsonBody.xml" */
+  path: string;
+  /** Raw XML content */
+  xml: string;
 }
 
 export interface ComponentInfo {
   manifest: ComponentManifest;
   extension?: ExtensionCatalog;
+  scriptlets?: ComponentScriptlet[];
   enabled: boolean;
   status: 'unknown' | 'healthy' | 'unhealthy' | 'checking';
 }
@@ -133,11 +145,26 @@ export async function loadAllComponents(): Promise<ComponentInfo[]> {
       extension = await loadComponentExtension(id, manifest.language);
     }
 
+    // Load scriptlet XML files shipped with this component
+    const scriptlets: ComponentScriptlet[] = [];
+    if (manifest.scriptlets) {
+      for (const file of manifest.scriptlets) {
+        try {
+          const url = `${base()}components/${id}/scriptlets/${file}`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const xml = await res.text();
+            scriptlets.push({ path: `scriptlets/${file}`, xml });
+          }
+        } catch { /* skip unavailable scriptlets */ }
+      }
+    }
+
     // Check localStorage for enabled state (default: enabled)
     const stored = localStorage.getItem(`component:${id}:enabled`);
     const enabled = stored !== null ? stored === 'true' : true;
 
-    results.push({ manifest, extension: extension ?? undefined, enabled, status: 'unknown' });
+    results.push({ manifest, extension: extension ?? undefined, scriptlets: scriptlets.length > 0 ? scriptlets : undefined, enabled, status: 'unknown' });
   }
 
   return results;
@@ -152,15 +179,25 @@ export function mergeCatalog(core: Catalog, components: ComponentInfo[]): Catalo
   const merged: CatalogStep[] = [...core.steps];
 
   for (const comp of components) {
-    if (comp.enabled && comp.extension?.steps) {
-      merged.push(...comp.extension.steps);
+    if (comp.extension?.steps) {
+      // Tag each extension step with its source component and enabled status
+      const tagged = comp.extension.steps.map(s => ({
+        ...s,
+        _source: {
+          componentId: comp.manifest.id,
+          componentName: comp.manifest.name,
+          enabled: comp.enabled,
+        },
+      }));
+      merged.push(...tagged);
     }
   }
 
   return { ...core, steps: merged };
 }
 
-/** Check health of a component */
+/** Check health of a component.
+ *  In dev mode, routes through /api/health-proxy to avoid CORS. */
 export async function checkComponentHealth(
   manifest: ComponentManifest,
   endpointOverride?: string
@@ -168,15 +205,21 @@ export async function checkComponentHealth(
   if (!manifest.healthCheck) return 'unknown' as any;
 
   const baseUrl = endpointOverride || `http://localhost:${manifest.docker?.ports?.[0]?.split(':')[0] || '8080'}`;
-  const url = `${baseUrl}${manifest.healthCheck.path}`;
+  const targetUrl = `${baseUrl}${manifest.healthCheck.path}`;
+  const method = manifest.healthCheck.method || 'GET';
+  const expected = manifest.healthCheck.expect?.status || 200;
 
   try {
-    const res = await fetch(url, {
-      method: manifest.healthCheck.method || 'GET',
-      signal: AbortSignal.timeout(5000),
-    });
-    const expected = manifest.healthCheck.expect?.status || 200;
-    return res.status === expected ? 'healthy' : 'unhealthy';
+    // Use server-side proxy to bypass CORS in dev mode
+    const proxyUrl = `/api/health-proxy?url=${encodeURIComponent(targetUrl)}&method=${method}`;
+    const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(8000) });
+    if (res.ok) {
+      const data = await res.json();
+      return data.status === expected ? 'healthy' : 'unhealthy';
+    }
+    // Proxy not available (production) — try direct fetch
+    const direct = await fetch(targetUrl, { method, signal: AbortSignal.timeout(5000) });
+    return direct.status === expected ? 'healthy' : 'unhealthy';
   } catch {
     return 'unhealthy';
   }

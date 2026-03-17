@@ -70,6 +70,7 @@ steps:
               variable: '$pinValue'
 
   # Verify COSE signature on an actor (table of parameters)
+  # Inline TemplateProcessor — matches reference test-case-vhl.xml pattern
   - match: '^([A-Za-z][A-Za-z0-9_]*) verifies COSE signature on ([A-Za-z][A-Za-z0-9_]*) with:$'
     table:
       required: [parameter, value]
@@ -110,10 +111,8 @@ steps:
             headers: '$verifyHeaders'
             body: '$verifyBody'
 
-  # Generic "calls Actor at path" steps are in core en.yml.
-  # Only domain-specific verbs below.
-
   # Authorize SHL on an actor with url and pin
+  # Inline TemplateProcessor for proper JSON escaping
   - match: '^([A-Za-z][A-Za-z0-9_]*) authorizes SHL on ([A-Za-z][A-Za-z0-9_]*) with url and pin$'
     actions:
       - assign:
