@@ -1,6 +1,6 @@
 // src/validation/gitbValidator.ts
 import { XMLValidator } from 'fast-xml-parser';
-import { ValidationResult, ValidationError } from '../types';
+import { ValidationResult, ValidationError } from '../../types';
 
 export class GITBValidator {
   private schemas: Map<string, string> = new Map();
@@ -82,16 +82,35 @@ export class GITBValidator {
   }
 
   private validateBasicStructure(xmlContent: string, errors: ValidationError[]): void {
-    // Check for required root element
-    if (!xmlContent.includes('<gitb:testcase') && !xmlContent.includes('<testcase')) {
+    const isTestSuite = xmlContent.includes('<testsuite') || xmlContent.includes('<gitb:testsuite');
+    const isTestCase = xmlContent.includes('<testcase') || xmlContent.includes('<gitb:testcase');
+    const isScriptlet = xmlContent.includes('<scriptlet') || xmlContent.includes('<gitb:scriptlet');
+
+    if (!isTestSuite && !isTestCase && !isScriptlet) {
       errors.push({
-        message: 'Missing root element <testcase>',
+        message: 'Missing root element <testcase>, <testsuite>, or <scriptlet>',
         type: 'error'
       });
     }
 
-    // Check for required sections
-    const requiredElements = ['metadata', 'actors', 'steps'];
+    // Scriptlets only require <steps> (and optionally <params>)
+    if (isScriptlet) {
+      if (!xmlContent.includes('<steps')) {
+        errors.push({
+          message: 'Missing required element <steps> in scriptlet',
+          type: 'error'
+        });
+      }
+      return;
+    }
+
+    // Both test suites and test cases require metadata and actors
+    const requiredElements = ['metadata', 'actors'];
+    // Only test cases require steps
+    if (isTestCase && !isTestSuite) {
+      requiredElements.push('steps');
+    }
+
     for (const element of requiredElements) {
       if (!xmlContent.includes(`<gitb:${element}`) && !xmlContent.includes(`<${element}`)) {
         errors.push({
@@ -113,11 +132,12 @@ export class GITBValidator {
   }
 
   private validateRequiredAttributes(xmlContent: string, errors: ValidationError[]): void {
-    // Check testcase has ID
-    const testcaseMatch = xmlContent.match(/<(?:gitb:)?testcase[^>]*>/);
-    if (testcaseMatch && !testcaseMatch[0].includes('id=')) {
+    // Check testcase or testsuite has ID
+    const rootMatch = xmlContent.match(/<(?:gitb:)?(?:testcase|testsuite|scriptlet)[^>]*>/);
+    if (rootMatch && !rootMatch[0].includes('id=')) {
+      const tag = rootMatch[0].includes('testsuite') ? 'testsuite' : 'testcase';
       errors.push({
-        message: 'Missing required attribute "id" on testcase element',
+        message: `Missing required attribute "id" on ${tag} element`,
         type: 'error'
       });
     }

@@ -407,206 +407,81 @@ export const dataModels: DataModel[] = [
   }
 ];
 
-export const exampleScenarios: ExampleScenario[] = [
-  // FHIR Examples
-  {
-    id: 'validate-patient',
-    name: 'Validate Patient',
-    description: 'Basic FHIR Patient resource validation',
-    dataModel: 'fhir',
-    content: `Feature: Client submits and monitor validates an allergy
-  As a client
-  I want to submit an allergy and have a monitor approve it
-  So that the test step is completed
+/**
+ * Example scenario metadata. Actual .feature content lives in
+ * public/features/<id>.feature and is loaded at runtime via loadExampleContent().
+ */
+export interface ExampleMeta {
+  id: string;
+  name: string;
+  description: string;
+  dataModel: string;
+  featureFile?: string;
+}
 
-  Background:
-    Given the test session is set up with dataset ingestion "Y" and server api root from SYSTEM
+export const exampleMetas: ExampleMeta[] = [
+  // VHL (default)
+  { id: 'vhl-integration',       name: 'VHL Integration',               description: 'End-to-end VHL QR code validation, COSE signature verification, and FHIR Bundle validation', dataModel: 'fhir', featureFile: 'vhl-integration.feature' },
 
-  Scenario: tc-client-001 Client submission with monitor approval
-    Given I create an allergy resource with:
-      | resourceType        | codeCode  | codeDisplay        | codeText              | reactionCode | reactionDisplay |
-      | AllergyIntolerance  | 762952008 | Peanut (substance) | Allergic to peanuts   | 39579001     | Anaphylactic    |
-    When I submit the created allergy
-    Then the resource is correctly uploaded to the server
-    And validate against http://hl7.org/fhir/StructureDefinition/AllergyIntolerance  # GF1
-    And the validation summary should show 0 errors and 0 warnings                                            
-    And evaluate FHIRPath "AllergyIntolerance.code.coding.where(system='http://snomed.info/sct').code" as "codes" # GF3
-    And inform the monitor "Please review the submission"                                                        # GF5
-    And wait for monitor validation within 60 seconds                                                             # GF7/GF9
-    And the monitor marks the submission as "Pass"`
-  },
-  {
-    id: 'create-observation',
-    name: 'Create Observation',
-    description: 'Create and validate FHIR Observation',
-    dataModel: 'fhir',
-    content: `Feature: Observation Resource Creation
+  // FHIR
+  { id: 'server',                 name: 'Server Allergy Flows',          description: 'FHIR server allergy registration, validation, and rejection flows',  dataModel: 'fhir', featureFile: 'server.feature' },
+  { id: 'validate-patient',       name: 'Validate Patient',              description: 'Basic FHIR Patient resource validation',                            dataModel: 'fhir' },
+  { id: 'create-observation',     name: 'Create Observation',            description: 'Create and validate FHIR Observation',                               dataModel: 'fhir' },
+  { id: 'be-patient',             name: 'Belgian Patient (be-patient)',  description: 'End-to-end: load IG, generate BePatient with SSIN/MRN, validate, matchetype, FHIRPath', dataModel: 'fhir' },
+  { id: 'testdata-generation',    name: 'Test Data Generation',          description: 'Generate FHIR test data from a profile with Karate-style data tables', dataModel: 'fhir' },
+  { id: 'testdata-bundle',        name: 'Test Data Bundle',              description: 'Generate a Bundle of resources from multiple data rows',              dataModel: 'fhir' },
+  { id: 'fhirpath-assertions',    name: 'FHIRPath Assertions',           description: 'Use FHIRPath expressions to assert values, check existence, and count', dataModel: 'fhir' },
+  { id: 'matchetype-comparison',  name: 'Matchetype Comparison',         description: 'Compare resources against expected patterns using matchetype with wildcards', dataModel: 'fhir' },
+  { id: 'enhanced-validation',    name: 'Enhanced Validation',           description: 'Validate with best-practice options, severity filtering, and issue text checks', dataModel: 'fhir' },
 
-Scenario: Create a vital signs observation
-    Given the user submits an Observation resource
-    When the resource is processed
-    Then validate against http://hl7.org/fhir/StructureDefinition/Observation
-    And poll for processing status
-    And inform the user "Observation created successfully"`
-  },
+  // SMART Guidelines
+  { id: 'smart-anc-workflow',     name: 'SMART ANC Workflow',            description: 'Antenatal Care workflow following SMART Guidelines',                  dataModel: 'smart-guidelines' },
+  { id: 'smart-immunization',     name: 'SMART Immunization',            description: 'Immunization workflow with SMART Guidelines',                        dataModel: 'smart-guidelines' },
 
-  // SMART Guidelines Examples
-  {
-    id: 'smart-anc-workflow',
-    name: 'SMART ANC Workflow',
-    description: 'Antenatal Care workflow following SMART Guidelines',
-    dataModel: 'smart-guidelines',
-    content: `Feature: SMART Guidelines ANC Workflow
+  // SMART L2 SOP
+  { id: 'l2-sop-requirements',       name: 'L2 SOP Health Program Requirements',  description: 'Follow L2 SOP for health program requirements analysis',   dataModel: 'smart-l2-sop' },
+  { id: 'l2-sop-clinical-decisions',  name: 'L2 SOP Clinical Decision Support',    description: 'Follow L2 SOP for clinical decision support requirements', dataModel: 'smart-l2-sop' },
 
-Scenario: Execute antenatal care workflow
-    Given collect patient data for antenatal care
-    When apply clinical guidelines for ANC
-    Then execute clinical decision support
-    And provide clinical recommendations
-    And create care plan for pregnant patient
-    And calculate quality indicators for ANC program`
-  },
-  {
-    id: 'smart-immunization',
-    name: 'SMART Immunization',
-    description: 'Immunization workflow with SMART Guidelines',
-    dataModel: 'smart-guidelines',
-    content: `Feature: SMART Guidelines Immunization
+  // SMART L3 SOP
+  { id: 'l3-sop-fhir-ig',        name: 'L3 SOP FHIR Implementation Guide', description: 'Follow L3 SOP for FHIR IG development',                         dataModel: 'smart-l3-sop' },
+  { id: 'l3-sop-cql',            name: 'L3 SOP CQL Development',            description: 'Follow L3 SOP for Clinical Quality Language development',        dataModel: 'smart-l3-sop' },
+  { id: 'l3-sop-questionnaire',  name: 'L3 SOP FHIR Questionnaire',         description: 'Follow L3 SOP for FHIR Questionnaire development',              dataModel: 'smart-l3-sop' },
 
-Scenario: Process immunization according to SMART Guidelines
-    Given collect patient immunization history
-    When validate data quality for immunization records  
-    Then execute clinical decision support for vaccines
-    And trigger clinical alerts if vaccines overdue
-    And update care pathway for immunization schedule
-    And monitor health outcomes for vaccination program`
-  },
+  // EIRA
+  { id: 'eira-interoperability',  name: 'EIRA Interoperability',         description: 'Test interoperability layers according to EIRA',                     dataModel: 'EIRA' },
 
-  // SMART L2 SOP Examples
-  {
-    id: 'l2-sop-requirements',
-    name: 'L2 SOP Health Program Requirements',
-    description: 'Follow L2 SOP for health program requirements analysis',
-    dataModel: 'smart-l2-sop',
-    content: `Feature: L2 SOP Health Program Requirements Analysis
+  // KMEHR
+  { id: 'kmehr-prescription',    name: 'KMEHR Prescription',            description: 'Process KMEHR prescription message',                                 dataModel: 'kmehr' },
 
-Scenario: Analyze health program requirements following L2 SOP
-    Given analyze health program objectives for maternal health
-    When document clinical workflows for antenatal care
-    And identify key health indicators for pregnancy outcomes
-    Then define care pathways for high-risk pregnancies
-    And establish program governance structure
-    And validate program requirements completeness`
-  },
-  {
-    id: 'l2-sop-clinical-decisions',
-    name: 'L2 SOP Clinical Decision Support',
-    description: 'Follow L2 SOP for clinical decision support requirements',
-    dataModel: 'smart-l2-sop',
-    content: `Feature: L2 SOP Clinical Decision Support Requirements
-
-Scenario: Define clinical decision support requirements following L2 SOP
-    Given identify clinical decision points in immunization workflow
-    When document clinical algorithms for vaccine recommendations
-    And define alert conditions for overdue vaccinations
-    Then specify recommendation logic for contraindications
-    And establish clinical thresholds for age-based vaccines
-    And validate clinical rules against evidence base`
-  },
-
-  // SMART L3 SOP Examples
-  {
-    id: 'l3-sop-fhir-ig',
-    name: 'L3 SOP FHIR Implementation Guide',
-    description: 'Follow L3 SOP for FHIR IG development',
-    dataModel: 'smart-l3-sop',
-    content: `Feature: L3 SOP FHIR Implementation Guide Development
-
-Scenario: Develop FHIR Implementation Guide following L3 SOP
-    Given create FHIR profiles for Patient and Immunization resources
-    When define value sets for vaccine codes and administration sites
-    And specify code systems for immunization status
-    Then create capability statements for immunization registry
-    And validate FHIR resources against profiles
-    And publish implementation guide to registry`
-  },
-  {
-    id: 'l3-sop-cql',
-    name: 'L3 SOP CQL Development',
-    description: 'Follow L3 SOP for Clinical Quality Language development',
-    dataModel: 'smart-l3-sop',
-    content: `Feature: L3 SOP Clinical Quality Language Development
-
-Scenario: Develop executable clinical logic using CQL following L3 SOP
-    Given author CQL libraries for immunization recommendations
-    When define clinical expressions for vaccine eligibility
-    And implement decision logic for contraindications
-    Then create quality measures for vaccination coverage
-    And test CQL execution against test patients
-    And validate clinical algorithms with subject matter experts`
-  },
-  {
-    id: 'l3-sop-questionnaire',
-    name: 'L3 SOP FHIR Questionnaire',
-    description: 'Follow L3 SOP for FHIR Questionnaire development',
-    dataModel: 'smart-l3-sop',
-    content: `Feature: L3 SOP FHIR Questionnaire Development
-
-Scenario: Create structured data collection forms following L3 SOP
-    Given design questionnaire structure for patient registration
-    When define question items for demographic information
-    And specify answer options for gender and ethnicity
-    Then implement conditional logic for pregnancy status
-    And validate questionnaire against FHIR specification
-    And test form functionality in reference implementation`
-  },
-
-  // EIRA Examples
-  {
-    id: 'eira-interoperability',
-    name: 'EIRA Interoperability',
-    description: 'Test interoperability layers according to EIRA',
-    dataModel: 'EIRA',
-    content: `Feature: EIRA Interoperability Assessment
-
-Scenario: Validate all EIRA interoperability layers
-    Given check legal compliance for health data exchange
-    When align business processes between organizations
-    And validate semantic meaning of health data
-    Then establish technical connection
-    And test system integration
-    And ensure GDPR compliance`
-  },
-
-  // KMEHR Examples
-  {
-    id: 'kmehr-prescription',
-    name: 'KMEHR Prescription',
-    description: 'Process KMEHR prescription message',
-    dataModel: 'kmehr',
-    content: `Feature: KMEHR Prescription Processing
-
-Scenario: Process electronic prescription
-    Given the user submits a KMEHR prescription
-    When the KMEHR is processed
-    Then validate KMEHR message
-    And process KMEHR transaction
-    And inform the user "Prescription processed"`
-  },
-
-  // openEHR Examples
-  {
-    id: 'openehr-composition',
-    name: 'openEHR Composition',
-    description: 'Validate openEHR composition',
-    dataModel: 'openehr',
-    content: `Feature: openEHR Composition Validation
-
-Scenario: Validate clinical composition
-    Given the user creates a clinical composition
-    When the composition is processed
-    Then validate against archetype openEHR-EHR-COMPOSITION.encounter.v1
-    And the composition should be valid
-    And inform the user "Composition validated successfully"`
-  }
+  // openEHR
+  { id: 'openehr-composition',   name: 'openEHR Composition',           description: 'Validate openEHR composition',                                       dataModel: 'openehr' },
 ];
+
+/** Fetch the .feature file content for an example */
+export async function loadExampleContent(meta: ExampleMeta): Promise<string> {
+  const base = import.meta.env.BASE_URL || '/';
+  const file = meta.featureFile ?? `${meta.id}.feature`;
+  const url = `${base}features/${file}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to load feature: ${url} (${res.status})`);
+  return res.text();
+}
+
+/** Load all examples as ExampleScenario objects (with content) */
+export async function loadExampleScenarios(): Promise<ExampleScenario[]> {
+  const results = await Promise.allSettled(
+    exampleMetas.map(async (meta) => {
+      const content = await loadExampleContent(meta);
+      return { ...meta, content } as ExampleScenario;
+    })
+  );
+  return results
+    .filter((r): r is PromiseFulfilledResult<ExampleScenario> => r.status === 'fulfilled')
+    .map(r => r.value);
+}
+
+/**
+ * @deprecated Use loadExampleScenarios() instead.
+ * Kept so existing imports don't break at compile time.
+ */
+export const exampleScenarios: ExampleScenario[] = [];

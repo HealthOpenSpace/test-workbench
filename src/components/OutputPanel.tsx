@@ -1,7 +1,8 @@
 // src/components/OutputPanel.tsx - Updated with validation
 import React, { useRef, useState, useEffect } from 'react';
 import { Copy, Download, AlertCircle, CheckCircle } from 'lucide-react';
-import { XMLOutput, ParseError } from '../types';
+import { XMLOutput } from '../parser/xmlGenerator';
+import { ParseError } from '../types';
 import { GITBValidator } from '../validation/gitbValidator.ts';
 
 interface OutputPanelProps {
@@ -20,6 +21,7 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
   const [copied, setCopied] = useState(false);
   const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
   const [isValidating, setIsValidating] = useState(false);
+  const [selectedFileIdx, setSelectedFileIdx] = useState(0);
   const validator = useRef<GITBValidator | null>(null);
 
   // Initialize validator
@@ -28,25 +30,38 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
     validator.current.loadSchemas().catch(console.error);
   }, []);
 
-  // Validate XML when output changes
+  // Validate XML when output changes — validate each file individually
   useEffect(() => {
     if (xmlOutput && validator.current) {
       setIsValidating(true);
-      validator.current.validateXML(xmlOutput.xml)
-        .then(result => {
-          setValidationResult(result);
-          setIsValidating(false);
-        })
-        .catch(error => {
-          console.error('Validation failed:', error);
-          setIsValidating(false);
+      Promise.all(
+        xmlOutput.files.map(f => validator.current!.validateXML(f.xml))
+      ).then(results => {
+        const allErrors = results.flatMap((r, i) =>
+          r.errors.map(e => ({ ...e, message: `[${xmlOutput.files[i].filename}] ${e.message}` }))
+        );
+        setValidationResult({
+          valid: results.every(r => r.valid),
+          errors: allErrors
         });
+        setIsValidating(false);
+      }).catch(error => {
+        console.error('Validation failed:', error);
+        setIsValidating(false);
+      });
     }
   }, [xmlOutput]);
 
+  // Reset selected file when output changes
+  useEffect(() => {
+    setSelectedFileIdx(0);
+  }, [xmlOutput]);
+
+  const selectedFile = xmlOutput?.files[selectedFileIdx];
+
   const handleCopy = () => {
-    if (xmlOutput) {
-      navigator.clipboard.writeText(xmlOutput.xml);
+    if (selectedFile) {
+      navigator.clipboard.writeText(selectedFile.xml);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -60,7 +75,7 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
       <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-            Compiled XML Output
+            Compiled Test Suite
           </h2>
           <div className="flex items-center gap-3">
             {/* Validation Status */}
@@ -121,7 +136,7 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
               disabled={!xmlOutput || hasErrors}
             >
               <Download size={16} />
-              Download
+              Download ZIP
             </button>
           </div>
         </div>
@@ -152,31 +167,51 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
           </div>
         ) : xmlOutput ? (
           <div className="h-full flex flex-col">
-            {/* Test Case Info */}
+            {/* Test Suite / Test Case Info */}
             <div className="mb-4 p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
               <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-2">
-                Test Case Details
+                Test Suite: {xmlOutput.testcaseName}
               </h3>
               <div className="grid grid-cols-3 gap-4 text-sm">
                 <div>
-                  <span className="text-gray-500 dark:text-gray-400">Name:</span>{' '}
+                  <span className="text-gray-500 dark:text-gray-400">Files:</span>{' '}
                   <span className="text-gray-900 dark:text-gray-100 font-medium">
-                    {xmlOutput.testcaseName}
+                    {xmlOutput.files.length}
                   </span>
                 </div>
                 <div>
-                  <span className="text-gray-500 dark:text-gray-400">Scriptlets:</span>{' '}
+                  <span className="text-gray-500 dark:text-gray-400">Test Cases:</span>{' '}
                   <span className="text-gray-900 dark:text-gray-100 font-medium">
-                    {xmlOutput.scriptletCount}
+                    {xmlOutput.files.filter(f => f.type === 'testcase').length}
                   </span>
                 </div>
                 <div>
-                  <span className="text-gray-500 dark:text-gray-400">Size:</span>{' '}
+                  <span className="text-gray-500 dark:text-gray-400">Total Size:</span>{' '}
                   <span className="text-gray-900 dark:text-gray-100 font-medium">
-                    {(new Blob([xmlOutput.xml]).size / 1024).toFixed(1)} KB
+                    {(xmlOutput.files.reduce((sum, f) => sum + new Blob([f.xml]).size, 0) / 1024).toFixed(1)} KB
                   </span>
                 </div>
               </div>
+            </div>
+
+            {/* File Tabs */}
+            <div className="mb-2 flex flex-wrap gap-1">
+              {xmlOutput.files.map((file, idx) => (
+                <button
+                  key={file.filename}
+                  onClick={() => setSelectedFileIdx(idx)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-t-lg border border-b-0 transition-colors ${
+                    idx === selectedFileIdx
+                      ? 'bg-white dark:bg-gray-800 text-blue-600 dark:text-blue-400 border-gray-300 dark:border-gray-600'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 border-transparent hover:bg-gray-200 dark:hover:bg-gray-600'
+                  }`}
+                >
+                  <span className={`inline-block w-2 h-2 rounded-full mr-1.5 ${
+                    file.type === 'testsuite' ? 'bg-purple-500' : 'bg-green-500'
+                  }`} />
+                  {file.filename}
+                </button>
+              ))}
             </div>
 
             {/* Validation Errors (if any) */}
@@ -201,8 +236,14 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
               </div>
             )}
 
-            {/* XML Display - rest of the component remains the same */}
-            {/* ... */}
+            {/* XML Display for selected file */}
+            {selectedFile && (
+              <div className="flex-1 min-h-0 overflow-auto bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
+                <pre className="p-4 text-sm text-gray-100 font-mono whitespace-pre overflow-x-auto">
+                  {selectedFile.xml}
+                </pre>
+              </div>
+            )}
           </div>
         ) : (
           <div className="h-full flex items-center justify-center">

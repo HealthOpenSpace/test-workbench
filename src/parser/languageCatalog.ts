@@ -1,19 +1,28 @@
 import yaml from 'js-yaml';
-import type { Catalog } from './types';
 
-// If you prefer dynamic locale switching, make the path configurable.
 export type CatalogAction =
   | { call: { path: string; output?: string; inputs?: Record<string,string> } }
   | { verify: { handler: string; desc?: string; inputs: Record<string,string> } }
   | { process: { handler: string; operation: string; output?: string; inputs: Record<string,string>; hidden?: boolean } }
-  | { assign: { to: string; value: string } }
+  | { assign: { to: string; value: string; append?: boolean } }
   | { listAppend: { list: string; item: Record<string,string> } }
-  | { foreach: { from: string; do: CatalogAction[] } };
+  | { foreach: { from: string; do: CatalogAction[] } }
+  | { send: { id?: string; desc?: string; handler: string; from?: string; to?: string; inputs: Record<string,string> } }
+  | { declareActor: { id: string; name?: string; role?: string; endpoint?: string; canonical?: string } }
+  | { declareVariable: { name: string; varType?: string; value?: string } }
+  | { interact: { id?: string; desc?: string; inputTitle?: string; requests: { desc: string; name?: string; inputType?: string; required?: boolean; variable: string }[] } }
+  | { log: string };
+
+export interface CatalogRequirement {
+  service: string;
+  version?: string;
+}
 
 export interface CatalogStep {
-  match: string;                // regex string
+  match: string;
   table?: { required: string[] };
   actions: CatalogAction[];
+  requires?: CatalogRequirement | CatalogRequirement[];
 }
 
 export interface Catalog {
@@ -22,31 +31,153 @@ export interface Catalog {
   steps: CatalogStep[];
 }
 
-export async function loadCatalog(locale = 'en'): Promise<Catalog> {
-    // BASE_URL is "/" locally, "/test-workbench/" on GitHub Pages
-    const base = import.meta.env.BASE_URL || '/';
-    const url = `${base}lang/${locale}.yml`;
-  
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`Failed to load catalog: ${url} (${res.status})`);
-    }
-  
-    const text = await res.text();
-    return yaml.load(text) as Catalog;
-  }
-  
+/** Extension catalog loaded from a component's steps.yml */
+export interface ExtensionCatalog {
+  id: string;
+  name: string;
+  description?: string;
+  steps: CatalogStep[];
+}
 
-// languageCatalog.ts
-export interface CatalogRequirement {
-    service: string;         // e.g. "FHIR-validator"
-    version?: string;        // e.g. ">=1.0"
+/** Component manifest loaded from component.yml */
+export interface ComponentManifest {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  docker?: {
+    image: string;
+    ports?: string[];
+    environment?: string[];
+    volumes?: string[];
+  };
+  healthCheck?: {
+    method: string;
+    path: string;
+    expect?: { status: number };
+  };
+  actors?: { id: string; description?: string }[];
+  language?: string; // relative path to steps.yml
+}
+
+export interface ComponentInfo {
+  manifest: ComponentManifest;
+  extension?: ExtensionCatalog;
+  enabled: boolean;
+  status: 'unknown' | 'healthy' | 'unhealthy' | 'checking';
+}
+
+const base = () => import.meta.env.BASE_URL || '/';
+
+/** Load the core language catalog */
+export async function loadCatalog(locale = 'en'): Promise<Catalog> {
+  const url = `${base()}lang/${locale}.yml`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Failed to load catalog: ${url} (${res.status})`);
   }
-  
-  export interface CatalogStep {
-    match: string;
-    table?: { required: string[] };
-    actions: CatalogAction[];
-    requires?: CatalogRequirement | CatalogRequirement[]; // ⬅️ NEW
+  const text = await res.text();
+  return yaml.load(text) as Catalog;
+}
+
+/** Discover available components from the index */
+export async function discoverComponents(): Promise<string[]> {
+  try {
+    const url = `${base()}components/index.json`;
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.components || [];
+  } catch {
+    return [];
   }
-  
+}
+
+/** Load a single component manifest */
+export async function loadComponentManifest(componentId: string): Promise<ComponentManifest | null> {
+  try {
+    const url = `${base()}components/${componentId}/component.yml`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const text = await res.text();
+    return yaml.load(text) as ComponentManifest;
+  } catch {
+    return null;
+  }
+}
+
+/** Load a component's language extension */
+export async function loadComponentExtension(componentId: string, languageFile: string): Promise<ExtensionCatalog | null> {
+  try {
+    const url = `${base()}components/${componentId}/${languageFile}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const text = await res.text();
+    return yaml.load(text) as ExtensionCatalog;
+  } catch {
+    return null;
+  }
+}
+
+/** Load all components and their extensions */
+export async function loadAllComponents(): Promise<ComponentInfo[]> {
+  const ids = await discoverComponents();
+  const results: ComponentInfo[] = [];
+
+  for (const id of ids) {
+    const manifest = await loadComponentManifest(id);
+    if (!manifest) continue;
+
+    let extension: ExtensionCatalog | null = null;
+    if (manifest.language) {
+      extension = await loadComponentExtension(id, manifest.language);
+    }
+
+    // Check localStorage for enabled state (default: enabled)
+    const stored = localStorage.getItem(`component:${id}:enabled`);
+    const enabled = stored !== null ? stored === 'true' : true;
+
+    results.push({ manifest, extension: extension ?? undefined, enabled, status: 'unknown' });
+  }
+
+  return results;
+}
+
+/**
+ * Merge component extensions into the core catalog.
+ * Extension steps are appended after core steps so that
+ * core patterns take precedence (first match wins).
+ */
+export function mergeCatalog(core: Catalog, components: ComponentInfo[]): Catalog {
+  const merged: CatalogStep[] = [...core.steps];
+
+  for (const comp of components) {
+    if (comp.enabled && comp.extension?.steps) {
+      merged.push(...comp.extension.steps);
+    }
+  }
+
+  return { ...core, steps: merged };
+}
+
+/** Check health of a component */
+export async function checkComponentHealth(
+  manifest: ComponentManifest,
+  endpointOverride?: string
+): Promise<'healthy' | 'unhealthy'> {
+  if (!manifest.healthCheck) return 'unknown' as any;
+
+  const baseUrl = endpointOverride || `http://localhost:${manifest.docker?.ports?.[0]?.split(':')[0] || '8080'}`;
+  const url = `${baseUrl}${manifest.healthCheck.path}`;
+
+  try {
+    const res = await fetch(url, {
+      method: manifest.healthCheck.method || 'GET',
+      signal: AbortSignal.timeout(5000),
+    });
+    const expected = manifest.healthCheck.expect?.status || 200;
+    return res.status === expected ? 'healthy' : 'unhealthy';
+  } catch {
+    return 'unhealthy';
+  }
+}

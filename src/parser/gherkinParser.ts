@@ -7,16 +7,49 @@ import {
   DataModel
 } from '../types';
 
-import { loadCatalog, Catalog, CatalogAction } from './languageCatalog';
+/** Parse a Gherkin doc string (triple-quoted block) starting at line index i+1 */
+function parseDocString(lines: string[], startIdx: number): { text: string; endIdx: number } | null {
+  let j = startIdx;
+  // skip blank lines
+  while (j < lines.length && lines[j].trim() === '') j++;
+  if (j >= lines.length) return null;
+  const openMatch = /^(\s*)"""(.*)$/.exec(lines[j]);
+  if (!openMatch) return null;
+  const indent = openMatch[1].length;
+  const firstLine = openMatch[2]; // content after opening """
+  const contentLines: string[] = [];
+  if (firstLine.trim()) contentLines.push(firstLine);
+  j++;
+  while (j < lines.length) {
+    const line = lines[j];
+    if (/^\s*"""/.test(line)) {
+      j++; // consume closing """
+      return { text: contentLines.join('\n'), endIdx: j };
+    }
+    // strip leading indent (up to the indent of the opening """)
+    const stripped = line.length >= indent ? line.slice(indent) : line.trimStart();
+    contentLines.push(stripped);
+    j++;
+  }
+  // unterminated doc string — return what we have
+  return { text: contentLines.join('\n'), endIdx: j };
+}
+
+import { loadCatalog, Catalog, CatalogAction, loadAllComponents, mergeCatalog, ComponentInfo } from './languageCatalog';
 
 
 export type IRAction =
-  | { type: 'call', path: string, output?: string, inputs?: Record<string,string> }
+  | { type: 'call', path: string, output?: string, from?: string, to?: string, inputs?: Record<string,string> }
+  | { type: 'send', id?: string, desc?: string, handler: string, from?: string, to?: string, inputs: Record<string,string> }
   | { type: 'verify', handler: string, desc?: string, inputs: Record<string,string> }
-  | { type: 'process', handler: string, operation: string, output?: string, inputs: Record<string,string>, hidden?: boolean }
-  | { type: 'assign', to: string, value: string }
+  | { type: 'process', handler: string, operation: string, output?: string, from?: string, to?: string, inputs: Record<string,string>, hidden?: boolean }
+  | { type: 'assign', to: string, value: string, append?: boolean }
+  | { type: 'log', value: string }
   | { type: 'listAppend', list: string, item: Record<string,string> }
-  | { type: 'foreach', from: string, do: IRAction[] };
+  | { type: 'foreach', from: string, do: IRAction[] }
+  | { type: 'declareActor', id: string, name?: string, role?: string, endpoint?: string, canonical?: string }
+  | { type: 'declareVariable', name: string, varType: string, value?: string }
+  | { type: 'interact', id?: string, desc?: string, inputTitle?: string, requests: { desc: string, name?: string, inputType?: string, required?: boolean, variable: string }[] };
 
 
 type ServicesMap = Record<string, string>; // { "FHIR-validator": "1.2.0", "Monitor": "2.1.0" }
@@ -26,7 +59,8 @@ export class GherkinParser {
   private catalog?: Catalog;
   private model?: DataModel;
   private services: ServicesMap;
-  private strictRequirements: boolean;  
+  private strictRequirements: boolean;
+  private components: ComponentInfo[] = [];
 
   constructor(model?: DataModel, options?: { services?: ServicesMap; strictRequirements?: boolean }) {
     this.model = model;
@@ -34,20 +68,33 @@ export class GherkinParser {
     this.strictRequirements = options?.strictRequirements ?? false; // warning by default
   }
 
-  /** Loads /lang/en.yml once */
+  /** Loads /lang/en.yml + enabled component extensions, merges them */
   async ensureCatalog(locale='en') {
-    if (!this.catalog) this.catalog = await loadCatalog(locale);
+    if (!this.catalog) {
+      const core = await loadCatalog(locale);
+      this.components = await loadAllComponents();
+      this.catalog = mergeCatalog(core, this.components);
+    }
   }
 
-  /** Basic Gherkin parser: Feature/Scenario/Steps (+ DataTables) -> ParsedScenario */
+  /** Get loaded components (available after ensureCatalog) */
+  getComponents(): ComponentInfo[] {
+    return this.components;
+  }
+
+  /** Basic Gherkin parser: Feature/Scenarios/Steps (+ DataTables) -> ParsedFeature
+   *  Supports multiple scenarios; Background steps are shared across all scenarios. */
   parse(text: string): ParsedScenario {
     const lines = text.replace(/\r\n/g, '\n').split('\n');
     const issues: ParseIssue[] = [];
     let inFeaturePreamble = false;
+    let featureDescription = '';
 
     let featureTitle = '';
-    let scenarioName = '';
-    const steps: Step[] = [];
+    const backgroundSteps: Step[] = [];
+    const scenarios: { name: string; steps: Step[] }[] = [];
+    let currentTarget: Step[] | null = null; // null = not collecting steps yet
+    let currentScenarioName = '';
 
     const STEP_RE = /^(Given|When|Then|And|But)\s+(.*)$/i;
     let i = 0;
@@ -60,25 +107,33 @@ export class GherkinParser {
 
       if (/^Feature:/i.test(line)) {
         featureTitle = line.replace(/^Feature:\s*/i, '').trim();
-        inFeaturePreamble = true;           // <-- accept narrative lines until Scenario/Background
-        i++; continue;
-      }
-      
-      if (/^Scenario:/i.test(line)) {
-        if (scenarioName) {
-          issues.push({ line: lineNo, severity: 'warning', message: 'Only one Scenario is supported; later scenarios will be ignored.' });
-        }
-        scenarioName = line.replace(/^Scenario:\s*/i, '').trim();
-        inFeaturePreamble = false;
+        inFeaturePreamble = true;
         i++; continue;
       }
 
       if (/^Background:/i.test(line)) {
-        inFeaturePreamble = false;          // <-- preamble ends; steps follow
+        inFeaturePreamble = false;
+        currentTarget = backgroundSteps;
         i++; continue;
       }
 
-      if (inFeaturePreamble) { i++; continue; }
+      if (/^Scenario:/i.test(line)) {
+        currentScenarioName = line.replace(/^Scenario:\s*/i, '').trim();
+        const scenarioSteps: Step[] = [];
+        scenarios.push({ name: currentScenarioName, steps: scenarioSteps });
+        currentTarget = scenarioSteps;
+        inFeaturePreamble = false;
+        i++; continue;
+      }
+
+      if (inFeaturePreamble) {
+        // Collect feature description lines
+        if (featureDescription) featureDescription += ' ';
+        featureDescription += line;
+        i++; continue;
+      }
+
+      if (!currentTarget) { i++; continue; }
 
       const m = STEP_RE.exec(line);
       if (m) {
@@ -91,7 +146,6 @@ export class GherkinParser {
         while (j < lines.length && /^\s*\|.*\|\s*$/.test(lines[j])) {
           const row = splitRow(stripInlineComments(lines[j]));
           if (tableRows.length === 0) {
-            // header row
             tableRows.push(Object.fromEntries(row.map((h) => [h, h])));
           } else {
             const header = Object.keys(tableRows[0]);
@@ -104,11 +158,22 @@ export class GherkinParser {
         let table: Record<string,string>[] | undefined;
         if (tableRows.length > 1) table = tableRows.slice(1);
 
-        steps.push({
+        // optional doc string (triple-quoted block)
+        let docString: string | undefined;
+        if (!table || table.length === 0) {
+          const ds = parseDocString(lines, j);
+          if (ds) {
+            docString = ds.text;
+            j = ds.endIdx;
+          }
+        }
+
+        currentTarget.push({
           type,
           text,
           line: lineNo,
-          table
+          table,
+          docString
         } as Step);
 
         i = j;
@@ -122,20 +187,34 @@ export class GherkinParser {
       i++;
     }
 
-    if (!scenarioName) {
+    if (scenarios.length === 0) {
       issues.push({ line: 1, severity: 'error', message: 'Missing "Scenario:" line' });
     }
 
+    // Build scenarios with background steps prepended
+    const builtScenarios = scenarios.map(s => ({
+      name: s.name,
+      steps: [...backgroundSteps, ...s.steps]
+    }));
+
+    // For backwards compat, the first scenario is the "main" scenario
+    const firstScenario = builtScenarios[0] || { name: 'Scenario', steps: [] };
+
     const scenario: GherkinScenario = {
       feature: featureTitle || 'Feature',
-      name: scenarioName || 'Scenario',
-      steps
+      name: firstScenario.name,
+      steps: firstScenario.steps
     } as unknown as GherkinScenario;
 
     const parsed: ParsedScenario = {
       scenario,
       errors: issues
     } as ParsedScenario;
+
+    // Attach all scenarios + feature metadata for test suite generation
+    (parsed as any).__scenarios = builtScenarios;
+    (parsed as any).__featureTitle = featureTitle || 'Feature';
+    (parsed as any).__featureDescription = featureDescription;
 
     return parsed;
   }
@@ -185,7 +264,7 @@ export class GherkinParser {
       }
 
       // 3) Expand actions (unchanged)
-      const ctx = { groups: m.slice(1), tableRows: step.table || [] };
+      const ctx = { groups: m.slice(1), tableRows: step.table || [], docString: step.docString || '' };
       const actions = materialize(entry.actions, ctx);
       const label = entry.match.replace(/^\^|\$$/g, '');
       return { actions, mappingLabel: label, issues };
@@ -217,15 +296,35 @@ export class GherkinParser {
   async expandScenarioToIR(parsed: ParsedScenario) {
     await this.ensureCatalog('en');
     const allIssues: ParseIssue[] = [];
-    const ir: IRAction[] = [];
 
-    for (const s of parsed.scenario.steps) {
-      const { actions, issues } = this.expandStep(s);
-      allIssues.push(...issues);
-      ir.push(...actions);
+    // Expand all scenarios
+    const scenarios = (parsed as any).__scenarios as { name: string; steps: Step[] }[] | undefined;
+    const scenarioIRs: { name: string; ir: IRAction[] }[] = [];
+
+    if (scenarios && scenarios.length > 0) {
+      for (const sc of scenarios) {
+        const scIr: IRAction[] = [];
+        for (const s of sc.steps) {
+          const { actions, issues } = this.expandStep(s);
+          allIssues.push(...issues);
+          scIr.push(...actions);
+        }
+        scenarioIRs.push({ name: sc.name, ir: scIr });
+      }
+    } else {
+      // Fallback: single scenario from parsed.scenario.steps
+      const ir: IRAction[] = [];
+      for (const s of parsed.scenario.steps) {
+        const { actions, issues } = this.expandStep(s);
+        allIssues.push(...issues);
+        ir.push(...actions);
+      }
+      scenarioIRs.push({ name: parsed.scenario.name || 'Test Case', ir });
     }
+
+    (parsed as any).__scenarioIRs = scenarioIRs;
+    (parsed as any).__ir = scenarioIRs[0]?.ir ?? []; // backwards compat
     parsed.errors = [...(parsed.errors || []), ...allIssues];
-    (parsed as any).__ir = ir; // used by XML generator
     return parsed;
   }
 }
@@ -240,10 +339,15 @@ function splitRow(line: string): string[] {
 
 function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
   const out: IRAction[] = [];
+  // For steps with a table but no foreach, make the first row available as $row
+  if (!ctx._row && ctx.tableRows?.length > 0) {
+    ctx._row = ctx.tableRows[0];
+  }
   const subst = (v: any): any =>
     typeof v === 'string'
-      ? v.replace(/\$([0-9]+)/g, (_: any, i: string) => ctx.groups[Number(i)-1] ?? '')
-           .replace(/\$row\.([A-Za-z0-9_]+)/g, (_: any, k: string) => ctx._row?.[k] ?? '')
+      ? v.replace(/\$docString/g, () => ctx.docString ?? '')
+           .replace(/\$([0-9]+)/g, (_: any, i: string) => ctx.groups[Number(i)-1] ?? '')
+           .replace(/\$row\.([A-Za-z0-9_.]+)/g, (_: any, k: string) => ctx._row?.[k] ?? '')
       : v;
 
   const visit = (a: any) => {
@@ -261,9 +365,22 @@ function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
       }
       return;
     }
+    if (clone.declareActor) {
+      out.push({ type: 'declareActor', id: subst(clone.declareActor.id), name: subst(clone.declareActor.name ?? ''), role: subst(clone.declareActor.role ?? ''), endpoint: subst(clone.declareActor.endpoint ?? ''), canonical: subst(clone.declareActor.canonical ?? '') });
+      return;
+    }
+    if (clone.send) {
+      for (const k in clone.send.inputs) clone.send.inputs[k] = subst(clone.send.inputs[k]);
+      out.push({ type: 'send', id: subst(clone.send.id ?? ''), desc: subst(clone.send.desc ?? ''), handler: clone.send.handler, from: subst(clone.send.from ?? ''), to: subst(clone.send.to ?? ''), inputs: clone.send.inputs });
+      return;
+    }
+    if (clone.log) {
+      out.push({ type: 'log', value: subst(typeof clone.log === 'string' ? clone.log : clone.log.value) });
+      return;
+    }
     if (clone.call) {
       if (clone.call.inputs) for (const k in clone.call.inputs) clone.call.inputs[k] = subst(clone.call.inputs[k]);
-      out.push({ type: 'call', path: clone.call.path, output: clone.call.output, inputs: clone.call.inputs });
+      out.push({ type: 'call', path: clone.call.path, output: clone.call.output ? subst(clone.call.output) : undefined, from: subst(clone.call.from ?? ''), to: subst(clone.call.to ?? ''), inputs: clone.call.inputs });
       return;
     }
     if (clone.verify) {
@@ -273,18 +390,33 @@ function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
     }
     if (clone.process) {
       for (const k in clone.process.inputs) clone.process.inputs[k] = subst(clone.process.inputs[k]);
-      out.push({ type: 'process', handler: clone.process.handler, operation: clone.process.operation, output: clone.process.output, inputs: clone.process.inputs, hidden: clone.process.hidden });
+      out.push({ type: 'process', handler: clone.process.handler, operation: clone.process.operation, output: clone.process.output ? subst(clone.process.output) : undefined, from: clone.process.from ? subst(clone.process.from) : undefined, to: clone.process.to ? subst(clone.process.to) : undefined, inputs: clone.process.inputs, hidden: clone.process.hidden });
       return;
     }
     if (clone.assign) {
       clone.assign.value = subst(clone.assign.value);
-      out.push({ type: 'assign', to: clone.assign.to, value: clone.assign.value });
+      out.push({ type: 'assign', to: subst(clone.assign.to), value: typeof clone.assign.value === 'string' ? clone.assign.value : JSON.stringify(clone.assign.value), append: clone.assign.append });
       return;
     }
     if (clone.listAppend) {
       const item: Record<string,string> = {};
       for (const k in clone.listAppend.item) item[k] = subst(clone.listAppend.item[k]);
-      out.push({ type: 'listAppend', list: clone.listAppend.list, item });
+      out.push({ type: 'listAppend', list: subst(clone.listAppend.list), item });
+      return;
+    }
+    if (clone.declareVariable) {
+      out.push({ type: 'declareVariable', name: subst(clone.declareVariable.name), varType: subst(clone.declareVariable.varType ?? 'string'), value: clone.declareVariable.value != null ? subst(clone.declareVariable.value) : undefined });
+      return;
+    }
+    if (clone.interact) {
+      const requests = (clone.interact.requests || []).map((r: any) => ({
+        desc: subst(r.desc ?? ''),
+        name: subst(r.name ?? ''),
+        inputType: r.inputType,
+        required: r.required,
+        variable: subst(r.variable ?? '')
+      }));
+      out.push({ type: 'interact', id: subst(clone.interact.id ?? ''), desc: subst(clone.interact.desc ?? ''), inputTitle: subst(clone.interact.inputTitle ?? ''), requests });
       return;
     }
   };
@@ -323,9 +455,16 @@ function compareVersions(a: [number,number,number], b: [number,number,number]): 
 }
 
 function stripInlineComments(raw: string): string {
-  // removes '#' and everything after, unless inside quotes (kept simple: common case)
-  // If you want strict quote handling later, we can enhance this.
-  const ix = raw.indexOf('#');
-  if (ix === -1) return raw;
-  return raw.slice(0, ix);
+  // removes '#' and everything after, unless inside quotes
+  let inDouble = false;
+  let inSingle = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === '"' && !inSingle) { inDouble = !inDouble; continue; }
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; continue; }
+    if (ch === '#' && !inDouble && !inSingle) {
+      return raw.slice(0, i);
+    }
+  }
+  return raw;
 }
