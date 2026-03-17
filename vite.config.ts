@@ -6,6 +6,41 @@ import { execSync } from 'child_process'
  * Vite dev plugin: resolve ITB numeric database IDs via docker exec → MySQL.
  * GET /api/itb-ids?suite=<identifier>&actors=<apiKey1,apiKey2>&org=<orgApiKey>
  */
+/**
+ * Vite dev plugin: proxy health checks to avoid CORS issues.
+ * GET /api/health-proxy?url=<encoded-url>&method=<GET|POST>
+ */
+function healthProxy(): Plugin {
+  return {
+    name: 'health-proxy',
+    configureServer(server) {
+      server.middlewares.use('/api/health-proxy', async (req, res) => {
+        const url = new URL(req.url || '/', `http://${req.headers.host}`);
+        const target = url.searchParams.get('url');
+        const method = url.searchParams.get('method') || 'GET';
+
+        if (!target) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: 'Missing url parameter' }));
+          return;
+        }
+
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 5000);
+          const resp = await fetch(target, { method, signal: controller.signal });
+          clearTimeout(timeout);
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ status: resp.status }));
+        } catch (err: any) {
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ status: 0, error: err?.message || 'unreachable' }));
+        }
+      });
+    },
+  };
+}
+
 function itbIdResolver(): Plugin {
   return {
     name: 'itb-id-resolver',
@@ -35,7 +70,7 @@ function itbIdResolver(): Plugin {
           `.replace(/\n/g, ' ');
 
           const raw = execSync(
-            `docker exec itb-gitb-mysql-1 mysql -u root -proot gitb -N -e "${sql}" 2>/dev/null`,
+            `docker exec -e MYSQL_PWD=root itb-gitb-mysql-1 mysql -u root gitb -N -e "${sql}"`,
             { encoding: 'utf-8', timeout: 5000 }
           );
 
@@ -56,7 +91,7 @@ function itbIdResolver(): Plugin {
           const dbQuery = (sql: string) => {
             try {
               return execSync(
-                `docker exec itb-gitb-mysql-1 mysql -u root -proot gitb -N -e "${sql}" 2>/dev/null`,
+                `docker exec -e MYSQL_PWD=root itb-gitb-mysql-1 mysql -u root gitb -N -e "${sql}"`,
                 { encoding: 'utf-8', timeout: 3000 }
               ).trim();
             } catch { return ''; }
@@ -154,7 +189,7 @@ function itbIdResolver(): Plugin {
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react(), itbIdResolver()],
+  plugins: [react(), healthProxy(), itbIdResolver()],
   // Use environment variable for base path, fallback to /test-workbench/ for GitHub Pages
   base: process.env.VITE_BASE_PATH || '/test-workbench/',
   optimizeDeps: {

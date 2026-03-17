@@ -234,6 +234,15 @@ export class GherkinParser {
       const m = re.exec(text);
       if (!m) continue;
 
+      // 0) Component availability check — warn if step requires a disabled component
+      if (entry._source && !entry._source.enabled) {
+        issues.push({
+          line: step.line,
+          severity: 'warning',
+          message: `Step requires component "${entry._source.componentName}" which is not enabled`,
+        });
+      }
+
       // 1) Table validation (unchanged)
       if (entry.table?.required?.length) {
         if (!step.table || step.table.length === 0) {

@@ -24,7 +24,7 @@ import { OutputPanel } from './components/OutputPanel';
 import { ModelSelector } from './components/ModelSelector';
 import { ExamplesPanel } from './components/ExamplesPanel';
 import { DataPoolsPanel } from './components/DataPoolsPanel';
-import { ComponentsPanel } from './components/ComponentsPanel';
+import { ComponentsPanel, RequiredActor } from './components/ComponentsPanel';
 import { SnippetPalette } from './components/SnippetPalette';
 import { GherkinParser } from './parser/gherkinParser';
 import { XMLGenerator, XMLOutput } from './parser/xmlGenerator';
@@ -340,6 +340,24 @@ function App() {
   const warnCount = issues.filter(e => e.severity === 'warning').length;
   const scenarioCount = (parsedScenario as any)?.__scenarios?.length ?? 0;
 
+  // Extract required actors from the IR (declareActor actions, excluding SUT)
+  const requiredActors: RequiredActor[] = useMemo(() => {
+    if (!parsedScenario) return [];
+    const scenarioIRs = (parsedScenario as any).__scenarioIRs as { name: string; ir: any[] }[] | undefined;
+    if (!scenarioIRs) return [];
+    const seen = new Set<string>();
+    const actors: RequiredActor[] = [];
+    for (const sc of scenarioIRs) {
+      for (const action of sc.ir) {
+        if (action.type === 'declareActor' && action.role !== 'SUT' && !seen.has(action.id)) {
+          seen.add(action.id);
+          actors.push({ id: action.id, endpoint: action.endpoint || undefined });
+        }
+      }
+    }
+    return actors;
+  }, [parsedScenario]);
+
   // ── Render ───────────────────────────────────────────────────────
   return (
     <div className={`h-screen flex flex-col ${isDark ? 'dark' : ''}`}>
@@ -535,7 +553,7 @@ function App() {
                 isDark={isDark}
               />
             ) : rightPanel === 'components' ? (
-              <ComponentsPanel isDark={isDark} />
+              <ComponentsPanel isDark={isDark} requiredActors={requiredActors} />
             ) : (
               <ExamplesPanel
                 examples={loadedExamples}

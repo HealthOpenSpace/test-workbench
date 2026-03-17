@@ -12,7 +12,7 @@ description: >
 docker:
   image: isipfoundation/hcert-validator:latest
   ports:
-    - "8080:8080"
+    - "8089:8080"
   environment:
     - SPRING_PROFILES_ACTIVE=default
   volumes: []
@@ -20,7 +20,7 @@ docker:
 # Health check endpoint — used by the workbench to verify the component is running
 healthCheck:
   method: GET
-  path: /actuator/health
+  path: /health
   expect:
     status: 200
 
