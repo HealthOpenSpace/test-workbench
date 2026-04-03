@@ -1,7 +1,5 @@
 {
   "components": [
-    "hcert-decoder",
-    "fhir-validator",
-    "smart-helper"
+    "fhir-validator"
   ]
 }
