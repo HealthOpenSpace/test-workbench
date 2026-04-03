@@ -33,6 +33,7 @@ export class XMLGenerator {
     return scriptlets;
   }
 
+
   generate(parsed: ParsedScenario): XMLOutput {
     const featureTitle = (parsed as any).__featureTitle ?? (parsed.scenario as any).feature ?? 'Feature';
     const featureDescription = (parsed as any).__featureDescription ?? featureTitle;
@@ -53,7 +54,6 @@ export class XMLGenerator {
       const stepsXml = emitIR(sc.ir);
       const actorsXml = emitActors(actors);
       const variablesXml = emitVariables(variables);
-
       const testcaseXml = `<?xml version="1.0" encoding="UTF-8"?>
 <testcase id="${escapeAttr(testcaseId)}"
           xmlns="http://www.gitb.com/tdl/v1/"
@@ -150,6 +150,7 @@ ${testcaseRefs}
     };
   }
 }
+
 
 interface DeclaredActor {
   id: string;
@@ -299,6 +300,10 @@ function emitSuiteActors(actors: DeclaredActor[]): string {
 }
 
 function emitIR(ir: IRAction[]): string {
+  // Find the SUT actor to use as default 'from' on send steps
+  const sutDecl = ir.find(a => a.type === 'declareActor' && a.role === 'SUT') as { type: 'declareActor'; id: string } | undefined;
+  const sutActor = sutDecl?.id || 'Client';
+
   const out: string[] = [];
   for (const a of ir) {
     if (a.type === 'declareActor') {
@@ -307,7 +312,8 @@ function emitIR(ir: IRAction[]): string {
     } else if (a.type === 'send') {
       const idAttr = a.id ? ` id="${escapeAttr(a.id)}"` : '';
       const descAttr = a.desc ? ` desc="${escapeAttr(a.desc)}"` : '';
-      const fromAttr = a.from ? ` from="${escapeAttr(a.from)}"` : '';
+      const from = a.from || sutActor;
+      const fromAttr = ` from="${escapeAttr(from)}"`;
       const toAttr = a.to ? ` to="${escapeAttr(a.to)}"` : '';
       out.push(`<send${idAttr}${descAttr} handler="${escapeAttr(a.handler)}"${fromAttr}${toAttr}>`);
       out.push(...emitInputs(a.inputs));
@@ -399,7 +405,9 @@ function quoteIfLiteral(v: string): string {
     const hasVarRefs = /\$[a-zA-Z_]\w*(?:\{[^}]*\})*/.test(v);
     if (!hasVarRefs) {
       // Pure literal with double quotes — single-quote wrap
-      return `'${v}'`;
+      // Escape any embedded single quotes to avoid breaking the TDL expression
+      const escaped = v.replace(/'/g, "\\'");
+      return `'${escaped}'`;
     }
     // Has $variable references — build concat() so TDL resolves them
     return buildConcatExpression(v);
@@ -423,13 +431,15 @@ function buildConcatExpression(v: string): string {
 
   while ((match = regex.exec(v)) !== null) {
     if (match.index > lastIndex) {
-      parts.push(`'${v.substring(lastIndex, match.index)}'`);
+      const lit = v.substring(lastIndex, match.index).replace(/'/g, "\\'");
+      parts.push(`'${lit}'`);
     }
     parts.push(match[1]); // variable reference bare
     lastIndex = regex.lastIndex;
   }
   if (lastIndex < v.length) {
-    parts.push(`'${v.substring(lastIndex)}'`);
+    const lit = v.substring(lastIndex).replace(/'/g, "\\'");
+    parts.push(`'${lit}'`);
   }
 
   if (parts.length === 1) return parts[0];

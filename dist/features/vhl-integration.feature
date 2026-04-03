@@ -29,7 +29,10 @@ Feature: VHL Integration – QR Code Validation Flow
     And extract "/cose/_raw" as "coseRaw"
 
     # 4. Extract metadata
-    When User calls HCertDecoder at "/extract/metadata" with cose and payload
+    When User calls HCertDecoder at "/extract/metadata" with:
+      """
+      {"cose":"$coseVal","payload":"$payloadVal"}
+      """
 
     # 5. Verify COSE signature
     When User verifies COSE signature on HCertDecoder with:
@@ -46,7 +49,10 @@ Feature: VHL Integration – QR Code Validation Flow
     And "sigValid" should be "true"
 
     # 6. Extract reference (short-link URL)
-    When User calls HCertDecoder at "/extract/reference" with hcert and payload
+    When User calls HCertDecoder at "/extract/reference" with:
+      """
+      {"hcert":"$hcertVal","payload":"$payloadVal"}
+      """
     Then the response status should be "200"
     And extract "/url" as "shlinkUrl"
 

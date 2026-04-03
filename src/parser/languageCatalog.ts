@@ -59,6 +59,7 @@ export interface ComponentManifest {
     expect?: { status: number };
   };
   actors?: { id: string; description?: string }[];
+  services?: { handler: string; path: string }[];
   language?: string; // relative path to steps.yml
   scriptlets?: string[]; // list of scriptlet XML files shipped with this component
 }

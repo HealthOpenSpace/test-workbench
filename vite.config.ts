@@ -1,11 +1,92 @@
-import { defineConfig, Plugin } from 'vite'
+import { defineConfig, Plugin, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { execSync } from 'child_process'
+
+/** Docker MySQL settings for ITB ID resolution — read from .env at server start */
+function getDbConfig(env: Record<string, string>) {
+  return {
+    container: env.ITB_MYSQL_CONTAINER || 'itb-mysql',
+    user: env.ITB_MYSQL_USER || 'root',
+    password: env.ITB_MYSQL_PASSWORD || 'root',
+    database: env.ITB_MYSQL_DATABASE || 'gitb',
+  };
+}
 
 /**
  * Vite dev plugin: resolve ITB numeric database IDs via docker exec → MySQL.
  * GET /api/itb-ids?suite=<identifier>&actors=<apiKey1,apiKey2>&org=<orgApiKey>
  */
+/**
+ * Vite dev plugin: dynamic reverse proxy for ITB API calls.
+ * The target base URL is encoded in the path:
+ *   /itb-proxy/<encoded-base-url>/rest/of/path
+ * e.g. /itb-proxy/http%3A%2F%2Flocalhost%3A9000/api/rest/testsuite/deploy
+ *   → forwards to http://localhost:9000/api/rest/testsuite/deploy
+ */
+function itbProxy(): Plugin {
+  return {
+    name: 'itb-proxy',
+    configureServer(server) {
+      server.middlewares.use('/itb-proxy', async (req, res) => {
+        // Extract encoded base URL from path: /itb-proxy/<encoded-base>/rest...
+        const rawPath = (req.url || '/');
+        const afterPrefix = rawPath.replace(/^\//, ''); // remove leading /
+        const slashIdx = afterPrefix.indexOf('/');
+        if (slashIdx < 0) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: 'Missing target base in path' }));
+          return;
+        }
+        const targetBase = decodeURIComponent(afterPrefix.substring(0, slashIdx));
+        const path = afterPrefix.substring(slashIdx);
+        const targetUrl = `${targetBase.replace(/\/+$/, '')}${path}`;
+
+        try {
+          // Collect request body
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) {
+            chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+          }
+          const body = chunks.length > 0 ? Buffer.concat(chunks) : undefined;
+
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 30000);
+
+          // Forward headers (except host and the custom header)
+          const fwdHeaders: Record<string, string> = {};
+          for (const [k, v] of Object.entries(req.headers)) {
+            if (k === 'host' || k === 'x-itb-target' || k === 'connection') continue;
+            if (typeof v === 'string') fwdHeaders[k] = v;
+          }
+
+          const resp = await fetch(targetUrl, {
+            method: req.method || 'GET',
+            headers: fwdHeaders,
+            body: body && body.length > 0 ? body : undefined,
+            signal: controller.signal,
+            // @ts-ignore -- duplex required for node fetch with body
+            duplex: body ? 'half' : undefined,
+          });
+          clearTimeout(timeout);
+
+          res.statusCode = resp.status;
+          // Forward response headers
+          for (const [k, v] of resp.headers.entries()) {
+            if (k === 'transfer-encoding') continue;
+            res.setHeader(k, v);
+          }
+          const respBody = await resp.arrayBuffer();
+          res.end(Buffer.from(respBody));
+        } catch (err: any) {
+          res.statusCode = 502;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: err?.message || 'proxy error' }));
+        }
+      });
+    },
+  };
+}
+
 /**
  * Vite dev plugin: proxy health checks to avoid CORS issues.
  * GET /api/health-proxy?url=<encoded-url>&method=<GET|POST>
@@ -41,7 +122,10 @@ function healthProxy(): Plugin {
   };
 }
 
-function itbIdResolver(): Plugin {
+function itbIdResolver(db: { container: string; user: string; password: string; database: string }): Plugin {
+  const dockerCmd = (sql: string) =>
+    `docker exec -e MYSQL_PWD=${db.password} ${db.container} mysql -u ${db.user} ${db.database} -N -e "${sql}"`;
+
   return {
     name: 'itb-id-resolver',
     configureServer(server) {
@@ -70,7 +154,7 @@ function itbIdResolver(): Plugin {
           `.replace(/\n/g, ' ');
 
           const raw = execSync(
-            `docker exec -e MYSQL_PWD=root itb-gitb-mysql-1 mysql -u root gitb -N -e "${sql}"`,
+            dockerCmd(sql),
             { encoding: 'utf-8', timeout: 5000 }
           );
 
@@ -91,7 +175,7 @@ function itbIdResolver(): Plugin {
           const dbQuery = (sql: string) => {
             try {
               return execSync(
-                `docker exec -e MYSQL_PWD=root itb-gitb-mysql-1 mysql -u root gitb -N -e "${sql}"`,
+                dockerCmd(sql),
                 { encoding: 'utf-8', timeout: 3000 }
               ).trim();
             } catch { return ''; }
@@ -188,8 +272,11 @@ function itbIdResolver(): Plugin {
 }
 
 // https://vitejs.dev/config/
-export default defineConfig({
-  plugins: [react(), healthProxy(), itbIdResolver()],
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  const db = getDbConfig(env);
+  return {
+  plugins: [react(), healthProxy(), itbProxy(), itbIdResolver(db)],
   // Use environment variable for base path, fallback to /test-workbench/ for GitHub Pages
   base: process.env.VITE_BASE_PATH || '/test-workbench/',
   optimizeDeps: {
@@ -211,13 +298,7 @@ export default defineConfig({
   server: {
     port: 3000,
     open: true,
-    proxy: {
-      '/itb-proxy': {
-        target: 'http://localhost:10003',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/itb-proxy/, ''),
-      }
-    }
+    proxy: {}  // ITB proxy handled by itbProxy() plugin below
   },
   define: {
     global: 'globalThis',
@@ -225,4 +306,5 @@ export default defineConfig({
   worker: {
     format: 'es'
   }
+};
 })

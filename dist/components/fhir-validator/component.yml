@@ -10,18 +10,30 @@ description: >
 docker:
   image: hapiproject/hapi:latest
   ports:
-    - "8080:8080"
+    - "8088:8081"
   environment:
     - hapi.fhir.validation.enabled=true
 
 healthCheck:
   method: GET
-  path: /fhir/metadata
+  path: /api/validator/definition
   expect:
     status: 200
 
 actors:
   - id: FHIRValidator
     description: FHIR validation server
+
+services:
+  - handler: FHIRValidator
+    path: /api/validator
+  - handler: FHIRPathProcessor
+    path: /api/fhirpath
+  - handler: MatchetypeProcessor
+    path: /api/matchetype
+  - handler: TestDataGenerator
+    path: /api/testdata
+  - handler: ValidationResultsProcessor
+    path: /api/validation-results
 
 language: steps.yml

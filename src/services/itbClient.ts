@@ -3,11 +3,12 @@ import JSZip from 'jszip';
 import type { GeneratedFile } from '../parser/xmlGenerator';
 
 export interface ITBConfig {
-  baseUrl: string;         // e.g. http://localhost:10003
+  baseUrl: string;         // e.g. http://localhost:9000
   deployPath: string;      // e.g. /api/rest/testsuite/deploy
-  apiKey?: string;         // optional API key for authentication
-  specificationId?: string; // target specification ID for deployment
   organisationApiKey?: string; // organisation API key for test execution
+  communityApiKey?: string;    // community API key for deployment (needs "manage test suites")
+  specificationId?: string;    // target specification ID for deployment
+  apiKey?: string;             // legacy — falls back for deploy if communityApiKey not set
   systemApiKey?: string;       // system API key for test execution
   // Numeric IDs for ITB UI URLs (not available via REST API)
   communityId?: string;
@@ -31,9 +32,11 @@ const STORAGE_KEY = 'itb-config';
  */
 function envDefaults(): ITBConfig {
   return {
-    baseUrl: import.meta.env.VITE_ITB_BASE_URL || 'http://localhost:10003',
+    baseUrl: import.meta.env.VITE_ITB_BASE_URL || 'http://localhost:9000',
     deployPath: import.meta.env.VITE_ITB_DEPLOY_PATH || '/api/rest/testsuite/deploy',
-    apiKey: import.meta.env.VITE_ITB_API_KEY || undefined,
+    organisationApiKey: import.meta.env.VITE_ITB_ORGANISATION_API_KEY || undefined,
+    systemApiKey: import.meta.env.VITE_ITB_SYSTEM_API_KEY || undefined,
+    communityApiKey: import.meta.env.VITE_ITB_COMMUNITY_API_KEY || undefined,
     specificationId: import.meta.env.VITE_ITB_SPECIFICATION_ID || undefined,
   };
 }
@@ -57,6 +60,8 @@ export function saveITBConfig(config: ITBConfig): void {
 /**
  * Rewrite an ITB URL to go through the Vite dev proxy when the
  * target origin differs from the current page (avoids CORS).
+ * The target base URL is encoded into the proxy path so the
+ * middleware knows where to forward the request.
  */
 function proxyUrl(baseUrl: string, path: string): string {
   const base = baseUrl.replace(/\/+$/, '');
@@ -67,7 +72,8 @@ function proxyUrl(baseUrl: string, path: string): string {
       target.hostname === current.hostname && target.port === current.port;
     if (sameOrigin) return `${base}${path}`;
   } catch { /* invalid URL — fall through to proxy */ }
-  return `/itb-proxy${path}`;
+  // Encode target base as first path segment: /itb-proxy/<encoded-base>/rest/of/path
+  return `/itb-proxy/${encodeURIComponent(base)}${path}`;
 }
 
 /**
@@ -106,8 +112,10 @@ export async function deployToITB(
   const targetUrl = `${config.baseUrl.replace(/\/+$/, '')}${deployPath}`;
 
   const headers: Record<string, string> = {};
-  if (config.apiKey) {
-    headers['ITB_API_KEY'] = config.apiKey;
+  // Deploy uses the community API key (needs "manage test suites" permission)
+  const deployKey = config.communityApiKey;
+  if (deployKey) {
+    headers['ITB_API_KEY'] = deployKey;
   }
 
   try {
@@ -153,20 +161,161 @@ export async function deployToITB(
 }
 
 /**
- * Quick health check — just try to reach the ITB base.
+ * Quick health check — try to reach the ITB base and check if the REST API is enabled.
+ * A 5xx means the server is up but unhealthy.
  */
 export async function checkITBHealth(baseUrl: string): Promise<{ ok: boolean; message: string }> {
-  // Try the root URL — any response (even 404) means the server is running
-  const url = proxyUrl(baseUrl, '/');
+  // First check if the server responds at all
+  const rootUrl = proxyUrl(baseUrl, '/');
   try {
-    const resp = await fetch(url, {
+    const resp = await fetch(rootUrl, {
       method: 'GET',
       signal: AbortSignal.timeout(5000),
     });
-    return { ok: true, message: `ITB reachable (${resp.status})` };
+    if (resp.status >= 500) {
+      return { ok: false, message: `ITB responded with server error (${resp.status})` };
+    }
   } catch (err: any) {
     return { ok: false, message: `Cannot reach ITB: ${err?.message || err}` };
   }
+  // Check if the REST API is enabled by fetching the OpenAPI spec
+  const apiUrl = proxyUrl(baseUrl, '/api/rest');
+  try {
+    const resp = await fetch(apiUrl, {
+      method: 'GET',
+      signal: AbortSignal.timeout(5000),
+    });
+    if (resp.status === 200) {
+      const body = await resp.text().catch(() => '');
+      if (body.includes('openapi')) {
+        return { ok: true, message: 'ITB reachable, REST API enabled' };
+      }
+    }
+    return { ok: false, message: 'ITB reachable but REST API not enabled (set AUTOMATION_API_ENABLED=true)' };
+  } catch {
+    return { ok: false, message: 'ITB reachable but REST API not available' };
+  }
+}
+
+/**
+ * Validate an organisation API key via POST /api/rest/tests/status.
+ * A valid key returns 200, an invalid one returns 403.
+ */
+export async function checkOrganisationKey(baseUrl: string, apiKey: string): Promise<{ ok: boolean; message: string }> {
+  const url = proxyUrl(baseUrl, '/api/rest/tests/status');
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'ITB_API_KEY': apiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ session: [] }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (resp.status === 200) {
+      return { ok: true, message: 'API key valid' };
+    }
+    const body = await resp.json().catch(() => null);
+    if (body?.error_description?.includes('API key') || body?.error_code === '204') {
+      return { ok: false, message: 'API key not recognized' };
+    }
+    if (resp.status === 403 || resp.status === 401) {
+      return { ok: false, message: 'API key rejected' };
+    }
+    return { ok: false, message: `Unexpected response (${resp.status}): ${body?.error_description || ''}` };
+  } catch (err: any) {
+    return { ok: false, message: `Connection error: ${err?.message || err}` };
+  }
+}
+
+/**
+ * Validate a system API key via GET /api/rest/conformance/{system}/{dummyActor}.
+ * Uses the organisation key for auth. A valid system key returns a specific error
+ * about the actor; an invalid system key returns a different error.
+ */
+export async function checkSystemKey(baseUrl: string, orgApiKey: string, systemApiKey: string): Promise<{ ok: boolean; message: string }> {
+  const url = proxyUrl(baseUrl, `/api/rest/conformance/${systemApiKey}/DUMMY_ACTOR_KEY`);
+  try {
+    const resp = await fetch(url, {
+      method: 'GET',
+      headers: { 'ITB_API_KEY': orgApiKey },
+      signal: AbortSignal.timeout(5000),
+    });
+    const body = await resp.json().catch(() => null);
+    if (resp.status === 200) {
+      // Shouldn't happen with dummy actor, but means both keys are valid
+      return { ok: true, message: 'System key valid' };
+    }
+    // If the error mentions the actor (not the system), the system key is valid
+    if (body?.error_description?.includes('actor') || body?.error_description?.includes('DUMMY_ACTOR_KEY')) {
+      return { ok: true, message: 'System key valid' };
+    }
+    // If it mentions the system key, it's invalid
+    if (body?.error_description?.includes('system')) {
+      return { ok: false, message: 'System key not found' };
+    }
+    if (body?.error_description?.includes('API key')) {
+      return { ok: false, message: 'Organisation key invalid (required to verify system key)' };
+    }
+    return { ok: false, message: `Unexpected response (${resp.status}): ${body?.error_description || ''}` };
+  } catch (err: any) {
+    return { ok: false, message: `Connection error: ${err?.message || err}` };
+  }
+}
+
+/**
+ * Validate a community API key via POST /api/rest/testsuite/deploy with no payload.
+ * A valid key returns 400 "Failed to parse provided payload" (key accepted, body missing).
+ * An invalid key returns 403 or an error about the API key.
+ */
+export async function checkCommunityKey(baseUrl: string, communityApiKey: string): Promise<{ ok: boolean; message: string }> {
+  const url = proxyUrl(baseUrl, '/api/rest/testsuite/deploy');
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'ITB_API_KEY': communityApiKey,
+        'Content-Type': 'application/json',
+      },
+      body: '{}',
+      signal: AbortSignal.timeout(5000),
+    });
+    const body = await resp.json().catch(() => null);
+    // 400 with "Failed to parse" = key is valid, just bad payload
+    if (resp.status === 400 && body?.error_description?.includes('parse')) {
+      return { ok: true, message: 'Community API key valid' };
+    }
+    // 103 = "not allowed to manage test suites" — key valid but wrong permissions
+    if (body?.error_code === '103') {
+      return { ok: false, message: 'Key valid but lacks "manage test suites" permission' };
+    }
+    if (body?.error_description?.includes('API key') || body?.error_code === '204') {
+      return { ok: false, message: 'Community API key not recognized' };
+    }
+    if (resp.status === 403 || resp.status === 401) {
+      return { ok: false, message: 'Community API key rejected' };
+    }
+    return { ok: false, message: `Unexpected response (${resp.status}): ${body?.error_description || ''}` };
+  } catch (err: any) {
+    return { ok: false, message: `Connection error: ${err?.message || err}` };
+  }
+}
+
+/**
+ * Validate the specification ID. The ITB API has no GET endpoint for specifications,
+ * so we attempt a dummy deploy and check if the specification is referenced in the error.
+ * For now, this just checks the format looks valid (non-empty UUID-like string).
+ */
+export async function checkSpecification(_baseUrl: string, _apiKey: string, specificationId: string): Promise<{ ok: boolean; message: string }> {
+  if (!specificationId.trim()) {
+    return { ok: false, message: 'Specification ID is empty' };
+  }
+  // Basic format check — ITB uses UUID-like keys
+  if (/^[A-Za-z0-9]{8}X[A-Za-z0-9]{4}X[A-Za-z0-9]{4}X[A-Za-z0-9]{4}X[A-Za-z0-9]{12}$/.test(specificationId)) {
+    return { ok: true, message: 'Format valid (will be verified on deploy)' };
+  }
+  return { ok: false, message: 'Unexpected format — expected UUID-like key (e.g. XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX)' };
 }
 
 /**
@@ -217,7 +366,7 @@ export async function getSpecificationActors(config: ITBConfig): Promise<any[]> 
   if (!config.specificationId) return [];
   const url = proxyUrl(config.baseUrl, `/api/rest/specification/${config.specificationId}/actors`);
   const headers: Record<string, string> = {};
-  if (config.apiKey) headers['ITB_API_KEY'] = config.apiKey;
+  if (config.organisationApiKey) headers['ITB_API_KEY'] = config.organisationApiKey;
   try {
     const resp = await fetch(url, { headers });
     if (resp.ok) return await resp.json();
@@ -231,7 +380,7 @@ export async function getSpecificationActors(config: ITBConfig): Promise<any[]> 
 export async function ensureSystem(config: ITBConfig): Promise<string | null> {
   if (config.systemApiKey) return config.systemApiKey;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (config.apiKey) headers['ITB_API_KEY'] = config.apiKey;
+  if (config.organisationApiKey) headers['ITB_API_KEY'] = config.organisationApiKey;
 
   // Create a system
   const url = proxyUrl(config.baseUrl, '/api/rest/system');
@@ -260,7 +409,7 @@ export async function ensureSystem(config: ITBConfig): Promise<string | null> {
 export async function ensureConformance(config: ITBConfig, systemApiKey: string, actorApiKey: string): Promise<boolean> {
   const url = proxyUrl(config.baseUrl, `/api/rest/conformance/${systemApiKey}/${actorApiKey}`);
   const headers: Record<string, string> = {};
-  if (config.apiKey) headers['ITB_API_KEY'] = config.apiKey;
+  if (config.organisationApiKey) headers['ITB_API_KEY'] = config.organisationApiKey;
   try {
     const resp = await fetch(url, { method: 'PUT', headers });
     return resp.ok;
@@ -277,7 +426,7 @@ export async function startTest(
   actorApiKey: string,
 ): Promise<ITBTestResult[]> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (config.apiKey) headers['ITB_API_KEY'] = config.apiKey;
+  if (config.organisationApiKey) headers['ITB_API_KEY'] = config.organisationApiKey;
   const url = proxyUrl(config.baseUrl, '/api/rest/tests/start');
 
   const results: ITBTestResult[] = [];
@@ -319,7 +468,7 @@ export async function startTest(
  */
 async function pollTestStatus(config: ITBConfig, sessionId: string): Promise<ITBTestResult> {
   const headers: Record<string, string> = {};
-  if (config.apiKey) headers['ITB_API_KEY'] = config.apiKey;
+  if (config.organisationApiKey) headers['ITB_API_KEY'] = config.organisationApiKey;
   const url = proxyUrl(config.baseUrl, `/api/rest/tests/status`);
 
   for (let i = 0; i < 30; i++) {
@@ -361,7 +510,7 @@ export async function resolveITBIds(
     .filter(Boolean);
   const orgKey = config.organisationApiKey || '';
   const sysKey = config.systemApiKey || '';
-  const communityKey = config.apiKey || '';
+  const communityKey = config.communityApiKey || '';
 
   const params = new URLSearchParams({
     suite: suiteId,
@@ -390,7 +539,7 @@ export async function resolveITBIds(
  * Build the ITB UI URL — full execution URL if numeric IDs are available,
  * otherwise just the app home page.
  *
- * Full format: {base}/app#/admin/users/community/{c}/organisation/{o}/test/{s}/{a}/execute?ts={ts}
+ * Format: {base}/app#/admin/users/community/{c}/organisation/{o}/test/{s}/{a}/execute?tc={tc}
  */
 export function getITBAppUrl(config: ITBConfig, ids?: { communityId?: number; organisationId?: number; systemId?: number; actorId?: number; testSuiteId?: number }): string {
   const base = config.baseUrl.replace(/\/+$/, '');
@@ -398,9 +547,9 @@ export function getITBAppUrl(config: ITBConfig, ids?: { communityId?: number; or
   const o = ids?.organisationId || config.organisationId;
   const s = ids?.systemId || config.systemId;
   const a = ids?.actorId || config.actorId;
-  const ts = ids?.testSuiteId || config.testSuiteId;
-  if (c && o && s && a && ts) {
-    return `${base}/app#/admin/users/community/${c}/organisation/${o}/test/${s}/${a}/execute?ts=${ts}`;
+  const tc = ids?.testSuiteId || config.testSuiteId;
+  if (c && o && s && a && tc) {
+    return `${base}/app#/admin/users/community/${c}/organisation/${o}/test/${s}/${a}/execute?tc=${tc}`;
   }
   return `${base}/app`;
 }

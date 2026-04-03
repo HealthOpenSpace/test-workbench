@@ -475,6 +475,13 @@ function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
       result = result.replace(/\$statusOrExpr/g, expr || '"false"');
     }
 
+    // If a pattern like "$N" resolved to "$varName" (quoted variable ref), unwrap
+    // the quotes so TDL treats it as a variable reference, not a literal string.
+    // e.g. '"$1"' with $1=$expectedSnomed → "$expectedSnomed" → unwrap to $expectedSnomed
+    if (/^"\$[a-zA-Z_]\w*(?:\{[^}]*\})*"$/.test(result)) {
+      result = result.slice(1, -1);
+    }
+
     return result;
   };
 

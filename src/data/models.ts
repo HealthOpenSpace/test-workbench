@@ -420,7 +420,10 @@ export interface ExampleMeta {
 }
 
 export const exampleMetas: ExampleMeta[] = [
-  // VHL (default)
+  // Belgian Vaccination (default)
+  { id: 'be-vaccination',         name: 'Belgian Vaccination (BeVaccination)', description: 'Validate BeVaccination Immunization: recorder/performer match and CNK/SNOMED consistency via Vitalink', dataModel: 'fhir' },
+
+  // VHL
   { id: 'vhl-integration',       name: 'VHL Integration',               description: 'End-to-end VHL QR code validation, COSE signature verification, and FHIR Bundle validation', dataModel: 'fhir', featureFile: 'vhl-integration.feature' },
 
   // FHIR

@@ -468,7 +468,7 @@ steps:
             expectedstring: '"$2"'
 
   # GF3 – FHIRPath evaluation against last payload
-  - match: '^evaluate FHIRPath "(.+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
+  - match: '^evaluate FHIRPath "([^"]+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
     actions:
       - process:
           handler: FHIRPathProcessor
@@ -580,78 +580,6 @@ steps:
             headers: '$jsonHeaders'
             body: '$docString'
 
-  # Actor calls Actor at "/path" with cose and payload (template-based)
-  - match: '^([A-Za-z][A-Za-z0-9_]*) calls ([A-Za-z][A-Za-z0-9_]*) at "([^"]+)" with cose and payload$'
-    actions:
-      - assign:
-          to: 'tplParamsCosePayload{cose}'
-          value: '$coseVal'
-      - assign:
-          to: 'tplParamsCosePayload{payload}'
-          value: '$payloadVal'
-      - assign:
-          to: 'tplCosePayload'
-          value: >-
-            '{"cose":${cose},"payload":${payload}}'
-      - process:
-          handler: 'TemplateProcessor'
-          operation: 'process'
-          output: 'templateBody'
-          inputs:
-            syntax: '"freemarker"'
-            template: '$tplCosePayload'
-            parameters: '$tplParamsCosePayload'
-      - assign:
-          to: 'jsonHeaders{Content-Type}'
-          value: '"application/json"'
-      - send:
-          id: 'lastRequest'
-          desc: 'POST with cose and payload'
-          handler: 'HttpMessagingV2'
-          from: '$1'
-          to: '$2'
-          inputs:
-            uri: 'concat($$2Base, "$3")'
-            method: '"POST"'
-            headers: '$jsonHeaders'
-            body: '$templateBody'
-
-  # Actor calls Actor at "/path" with hcert and payload (template-based)
-  - match: '^([A-Za-z][A-Za-z0-9_]*) calls ([A-Za-z][A-Za-z0-9_]*) at "([^"]+)" with hcert and payload$'
-    actions:
-      - assign:
-          to: 'tplParamsHcertPayload{hcert}'
-          value: '$hcertVal'
-      - assign:
-          to: 'tplParamsHcertPayload{payload}'
-          value: '$payloadVal'
-      - assign:
-          to: 'tplHcertPayload'
-          value: >-
-            '{"hcert":${hcert},"payload":${payload}}'
-      - process:
-          handler: 'TemplateProcessor'
-          operation: 'process'
-          output: 'templateBody'
-          inputs:
-            syntax: '"freemarker"'
-            template: '$tplHcertPayload'
-            parameters: '$tplParamsHcertPayload'
-      - assign:
-          to: 'jsonHeaders{Content-Type}'
-          value: '"application/json"'
-      - send:
-          id: 'lastRequest'
-          desc: 'POST with hcert and payload'
-          handler: 'HttpMessagingV2'
-          from: '$1'
-          to: '$2'
-          inputs:
-            uri: 'concat($$2Base, "$3")'
-            method: '"POST"'
-            headers: '$jsonHeaders'
-            body: '$templateBody'
-
   # Backwards compat: Actor sends JSON POST to a full URL with: (docstring)
   - match: '^([A-Za-z][A-Za-z0-9_]*) sends (?:a )?(?:HCERT )?(?:decode |JSON )?(?:request |POST )?to "([^"]+)" with:$'
     actions:
@@ -711,12 +639,65 @@ steps:
           to: '$1'
           value: '$docString'
 
+  # ------------------------------------------------------------------
+  # USER UPLOAD — prompt the user to upload a JSON resource file
+  # ------------------------------------------------------------------
+  - match: '^([A-Za-z][A-Za-z0-9_]*) uploads a resource as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - declareVariable:
+          name: '$2'
+          varType: 'string'
+      - interact:
+          id: 'uploadResource'
+          desc: 'Upload a FHIR resource'
+          inputTitle: 'Provide resource'
+          requests:
+            - desc: 'Upload a JSON resource file:'
+              name: '$2'
+              inputType: 'UPLOAD'
+              required: true
+              variable: '$$2'
+
   # Assign a simple string value to a variable
   - match: '^set "([A-Za-z_][A-Za-z0-9_]*)" to "([^"]+)"$'
     actions:
       - assign:
           to: '$1'
           value: '"$2"'
+
+  # ------------------------------------------------------------------
+  # HTTP GET — fetch a URL and store response body in a variable
+  # ------------------------------------------------------------------
+  - match: '^fetch "([^"]+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - send:
+          id: 'lastRequest'
+          desc: 'GET external resource'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: '"$1"'
+            method: '"GET"'
+            headers: '$jsonHeaders'
+      - verify:
+          handler: 'NumberValidator'
+          desc: 'Fetch returns HTTP 200'
+          inputs:
+            actualnumber: '$lastRequest{response}{status}'
+            expectednumber: '"200"'
+      - assign:
+          to: '$2'
+          value: '$lastRequest{response}{body}'
+
+  # ------------------------------------------------------------------
+  # DEBUG / LOG — emit a log line visible in ITB step reports
+  # ------------------------------------------------------------------
+  - match: '^log "([^"]+)"$'
+    actions:
+      - log: '"$1"'
+
+  - match: '^log variable "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - log: 'concat("$1 = ", $$1)'
 
   # ==================================================================
   # VARIABLE VALUE ASSERTIONS

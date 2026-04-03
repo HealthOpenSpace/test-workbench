@@ -65,6 +65,7 @@
 			<xsd:element name="config" type="gitb:Configuration" minOccurs="0" maxOccurs="unbounded"/>
 		</xsd:sequence>
 		<xsd:attribute name="name" type="xsd:string" use="required"/>
+		<xsd:attribute name="type" type="xsd:string"/>
 		<xsd:attribute name="uri" type="xsd:string" use="required"/>
 	</xsd:complexType>
 	<xsd:complexType name="Variables">

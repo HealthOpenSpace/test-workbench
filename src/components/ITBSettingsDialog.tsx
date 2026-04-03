@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, CheckCircle, AlertCircle, Loader2, Search } from 'lucide-react';
-import { ITBConfig, checkITBHealth, discoverEndpoints } from '../services/itbClient';
+import { ITBConfig, checkITBHealth, checkOrganisationKey, checkSystemKey, checkCommunityKey, checkSpecification, discoverEndpoints } from '../services/itbClient';
 
 interface Props {
   config: ITBConfig;
@@ -11,7 +11,9 @@ interface Props {
 export const ITBSettingsDialog: React.FC<Props> = ({ config, onSave, onClose }) => {
   const [baseUrl, setBaseUrl] = useState(config.baseUrl);
   const [deployPath, setDeployPath] = useState(config.deployPath || '/api/rest/testsuite/deploy');
-  const [apiKey, setApiKey] = useState(config.apiKey ?? '');
+  const [organisationApiKey, setOrganisationApiKey] = useState(config.organisationApiKey ?? '');
+  const [systemApiKey, setSystemApiKey] = useState(config.systemApiKey ?? '');
+  const [communityApiKey, setCommunityApiKey] = useState(config.communityApiKey ?? '');
   const [specificationId, setSpecificationId] = useState(config.specificationId ?? '');
   const [communityId, setCommunityId] = useState(config.communityId ?? '');
   const [organisationId, setOrganisationId] = useState(config.organisationId ?? '');
@@ -19,7 +21,15 @@ export const ITBSettingsDialog: React.FC<Props> = ({ config, onSave, onClose }) 
   const [actorId, setActorId] = useState(config.actorId ?? '');
   const [testSuiteId, setTestSuiteId] = useState(config.testSuiteId ?? '');
   const [healthStatus, setHealthStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const [orgKeyStatus, setOrgKeyStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const [systemKeyStatus, setSystemKeyStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const [communityKeyStatus, setCommunityKeyStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const [specStatus, setSpecStatus] = useState<{ ok: boolean; message: string } | null>(null);
   const [checking, setChecking] = useState(false);
+  const [checkingOrgKey, setCheckingOrgKey] = useState(false);
+  const [checkingSystemKey, setCheckingSystemKey] = useState(false);
+  const [checkingCommunityKey, setCheckingCommunityKey] = useState(false);
+  const [checkingSpec, setCheckingSpec] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<{ path: string; status: number }[] | null>(null);
 
@@ -29,6 +39,38 @@ export const ITBSettingsDialog: React.FC<Props> = ({ config, onSave, onClose }) 
     const result = await checkITBHealth(baseUrl);
     setHealthStatus(result);
     setChecking(false);
+  };
+
+  const handleCheckOrgKey = async () => {
+    setCheckingOrgKey(true);
+    setOrgKeyStatus(null);
+    const result = await checkOrganisationKey(baseUrl, organisationApiKey);
+    setOrgKeyStatus(result);
+    setCheckingOrgKey(false);
+  };
+
+  const handleCheckSystemKey = async () => {
+    setCheckingSystemKey(true);
+    setSystemKeyStatus(null);
+    const result = await checkSystemKey(baseUrl, organisationApiKey, systemApiKey);
+    setSystemKeyStatus(result);
+    setCheckingSystemKey(false);
+  };
+
+  const handleCheckCommunityKey = async () => {
+    setCheckingCommunityKey(true);
+    setCommunityKeyStatus(null);
+    const result = await checkCommunityKey(baseUrl, communityApiKey);
+    setCommunityKeyStatus(result);
+    setCheckingCommunityKey(false);
+  };
+
+  const handleCheckSpec = async () => {
+    setCheckingSpec(true);
+    setSpecStatus(null);
+    const result = await checkSpecification(baseUrl, apiKey, specificationId);
+    setSpecStatus(result);
+    setCheckingSpec(false);
   };
 
   const handleDiscover = async () => {
@@ -43,7 +85,9 @@ export const ITBSettingsDialog: React.FC<Props> = ({ config, onSave, onClose }) 
     onSave({
       baseUrl: baseUrl.trim(),
       deployPath: deployPath.trim() || '/api/rest/testsuite/deploy',
-      apiKey: apiKey.trim() || undefined,
+      organisationApiKey: organisationApiKey.trim() || undefined,
+      systemApiKey: systemApiKey.trim() || undefined,
+      communityApiKey: communityApiKey.trim() || undefined,
       specificationId: specificationId.trim() || undefined,
       communityId: communityId.trim() || undefined,
       organisationId: organisationId.trim() || undefined,
@@ -56,9 +100,9 @@ export const ITBSettingsDialog: React.FC<Props> = ({ config, onSave, onClose }) 
 
   /** Parse ITB URL and extract numeric IDs */
   const handleParseUrl = () => {
-    const input = prompt('Paste an ITB test execution URL:\ne.g. http://localhost:10003/app#/admin/users/community/2/organisation/3/test/1/6/execute?ts=6');
+    const input = prompt('Paste an ITB test execution URL:\ne.g. http://localhost:9000/app#/admin/users/community/2/organisation/3/test/2/1/execute?tc=1');
     if (!input) return;
-    const m = input.match(/community\/(\d+)\/organisation\/(\d+)\/test\/(\d+)\/(\d+)\/execute\?ts=(\d+)/);
+    const m = input.match(/community\/(\d+)\/organisation\/(\d+)\/test\/(\d+)\/(\d+)\/execute\?t[cs]=(\d+)/);
     if (m) {
       setCommunityId(m[1]);
       setOrganisationId(m[2]);
@@ -66,7 +110,7 @@ export const ITBSettingsDialog: React.FC<Props> = ({ config, onSave, onClose }) 
       setActorId(m[4]);
       setTestSuiteId(m[5]);
     } else {
-      alert('Could not parse IDs from that URL. Expected format: .../community/{n}/organisation/{n}/test/{n}/{n}/execute?ts={n}');
+      alert('Could not parse IDs from that URL. Expected format: .../community/{n}/organisation/{n}/test/{n}/{n}/execute?tc={n}');
     }
   };
 
@@ -172,18 +216,92 @@ export const ITBSettingsDialog: React.FC<Props> = ({ config, onSave, onClose }) 
             )}
           </div>
 
-          {/* API Key */}
+          {/* Organisation API Key */}
           <div>
             <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-              API Key <span className="text-gray-400">(optional)</span>
+              Organisation API Key <span className="text-gray-400">(for test execution)</span>
             </label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={e => setApiKey(e.target.value)}
-              placeholder="Bearer token for authenticated deployments"
-              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-900 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={organisationApiKey}
+                onChange={e => { setOrganisationApiKey(e.target.value); setOrgKeyStatus(null); }}
+                placeholder="Organisation key from ITB Admin"
+                className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-900 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              <button
+                onClick={handleCheckOrgKey}
+                disabled={checkingOrgKey || !baseUrl.trim() || !organisationApiKey.trim()}
+                className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700 disabled:opacity-40 transition-colors"
+              >
+                {checkingOrgKey ? <Loader2 size={14} className="animate-spin" /> : 'Test'}
+              </button>
+            </div>
+            {orgKeyStatus && (
+              <div className={`mt-1.5 flex items-center gap-1 text-xs ${orgKeyStatus.ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                {orgKeyStatus.ok ? <CheckCircle size={12} /> : <AlertCircle size={12} />}
+                {orgKeyStatus.message}
+              </div>
+            )}
+          </div>
+
+          {/* System API Key */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+              System API Key <span className="text-gray-400">(for test sessions)</span>
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={systemApiKey}
+                onChange={e => { setSystemApiKey(e.target.value); setSystemKeyStatus(null); }}
+                placeholder="System key from ITB Admin"
+                className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-900 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              <button
+                onClick={handleCheckSystemKey}
+                disabled={checkingSystemKey || !baseUrl.trim() || !organisationApiKey.trim() || !systemApiKey.trim()}
+                className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700 disabled:opacity-40 transition-colors"
+                title={!organisationApiKey.trim() ? 'Organisation key required' : ''}
+              >
+                {checkingSystemKey ? <Loader2 size={14} className="animate-spin" /> : 'Test'}
+              </button>
+            </div>
+            {systemKeyStatus && (
+              <div className={`mt-1.5 flex items-center gap-1 text-xs ${systemKeyStatus.ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                {systemKeyStatus.ok ? <CheckCircle size={12} /> : <AlertCircle size={12} />}
+                {systemKeyStatus.message}
+              </div>
+            )}
+          </div>
+
+          {/* Community API Key */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+              Community API Key <span className="text-gray-400">(for deployment)</span>
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={communityApiKey}
+                onChange={e => { setCommunityApiKey(e.target.value); setCommunityKeyStatus(null); }}
+                placeholder="Community key with 'manage test suites' permission"
+                className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-900 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              <button
+                onClick={handleCheckCommunityKey}
+                disabled={checkingCommunityKey || !baseUrl.trim() || !communityApiKey.trim()}
+                className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700 disabled:opacity-40 transition-colors"
+              >
+                {checkingCommunityKey ? <Loader2 size={14} className="animate-spin" /> : 'Test'}
+              </button>
+            </div>
+            {communityKeyStatus && (
+              <div className={`mt-1.5 flex items-center gap-1 text-xs ${communityKeyStatus.ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                {communityKeyStatus.ok ? <CheckCircle size={12} /> : <AlertCircle size={12} />}
+                {communityKeyStatus.message}
+              </div>
+            )}
           </div>
 
           {/* Specification ID */}
@@ -191,13 +309,28 @@ export const ITBSettingsDialog: React.FC<Props> = ({ config, onSave, onClose }) 
             <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
               Specification ID <span className="text-gray-400">(optional)</span>
             </label>
-            <input
-              type="text"
-              value={specificationId}
-              onChange={e => setSpecificationId(e.target.value)}
-              placeholder="Target specification for deployment"
-              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-900 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={specificationId}
+                onChange={e => { setSpecificationId(e.target.value); setSpecStatus(null); }}
+                placeholder="Target specification for deployment"
+                className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-900 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              <button
+                onClick={handleCheckSpec}
+                disabled={checkingSpec || !baseUrl.trim() || !specificationId.trim()}
+                className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-700 disabled:opacity-40 transition-colors"
+              >
+                {checkingSpec ? <Loader2 size={14} className="animate-spin" /> : 'Test'}
+              </button>
+            </div>
+            {specStatus && (
+              <div className={`mt-1.5 flex items-center gap-1 text-xs ${specStatus.ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                {specStatus.ok ? <CheckCircle size={12} /> : <AlertCircle size={12} />}
+                {specStatus.message}
+              </div>
+            )}
           </div>
 
           {/* ITB UI IDs for "Open in ITB" link */}
@@ -238,7 +371,7 @@ export const ITBSettingsDialog: React.FC<Props> = ({ config, onSave, onClose }) 
             </div>
             {communityId && organisationId && systemId && actorId && testSuiteId && (
               <p className="mt-1.5 text-[10px] text-gray-400 dark:text-gray-500 font-mono truncate">
-                .../community/{communityId}/organisation/{organisationId}/test/{systemId}/{actorId}/execute?ts={testSuiteId}
+                .../community/{communityId}/organisation/{organisationId}/test/{systemId}/{actorId}/execute?tc={testSuiteId}
               </p>
             )}
           </div>
