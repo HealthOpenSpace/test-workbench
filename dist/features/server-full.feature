@@ -7,7 +7,7 @@ Feature: Server handles Belgian allergy resources
     Given FHIRServer is the system under test on http://localhost:8080/fhir as defined by http://hl7.org/fhir/ActorDefinition/server
     And Client is available on http://localhost:9000/fhir as defined by http://hl7.org/fhir/ActorDefinition/client
     And Validator is available
-    And Validator is preloaded with package hl7.fhir.be.allergy#1.1.2
+    And Validator is loaded with package "hl7.fhir.be.allergy#1.1.2"
     And FHIRServer is configured with data pool "default"
 
   # ------------------------------------------------------------------

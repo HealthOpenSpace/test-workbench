@@ -8,8 +8,8 @@ Feature: Tutorial - Validating a Belgian Patient resource
     Given Client is the system under test
     And FHIRServer is available
     And Validator is available as "FHIR Validation Service"
-    And FHIRServer is configured with data pool "default"
-    And load implementation guide "hl7.fhir.be.core#2.1.2" and verify
+    And FHIRValidator is available
+    And FHIRValidator is loaded with package "hl7.fhir.be.core#2.1.2"
 
   Scenario: tutorial-001 Generate, validate, match, and assert
 

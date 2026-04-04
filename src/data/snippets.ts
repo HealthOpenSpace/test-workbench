@@ -628,7 +628,7 @@ export const snippetCategories: SnippetCategory[] = [
     ],
   },
 
-  // ── HCERT / QR Code ────────────────────────────────────────────────
+  /* HCERT / QR Code snippets removed — see public/components/hcert-decoder/
   {
     id: 'hcert',
     label: 'HCERT / QR Code',
@@ -839,6 +839,7 @@ export const snippetCategories: SnippetCategory[] = [
       },
     ],
   },
+  END HCERT block */
 
   // ── Wildcards Reference ────────────────────────────────────────────
   {

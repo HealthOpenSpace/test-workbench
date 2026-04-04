@@ -1,576 +1,87 @@
 version: 1
 locale: en
 
-# --------------------------------------------------------------------
-# Core "infrastructure" steps used by both server and client features
-# --------------------------------------------------------------------
-steps:
-  # ------------------------------------------------------------------
-  # ACTOR DECLARATIONS
-  # ------------------------------------------------------------------
+# ====================================================================
+# FHIR Gherkin Dialect — Core Language Specification
+# ====================================================================
+# Generic ITB test step patterns. Domain-specific steps (validation,
+# FHIRPath, matchetype, test data) are provided by component extensions
+# in public/components/*/steps.yml.
+#
+# Syntax conventions:
+#   <required>     — a required parameter
+#   [optional]     — an optional clause
+#   <Actor>        — an actor identifier (e.g. User, FHIRValidator)
+#   <variable>     — a variable name
+#   <value>        — a quoted string value
+# ====================================================================
 
-  # Declare the system under test (bare)
+steps:
+
+  # ==================================================================
+  # 1. ACTORS
+  # ==================================================================
+  # Doc: <Actor> is the system under test [at <endpoint>] [as defined by <canonical>]
+  # Doc: <Actor> is available [as "<name>"] [at <endpoint>] [as defined by <canonical>]
+
+  # -- System Under Test (most specific first) --
+
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test (?:on|at) "?(https?://[^"\s]+)"? as defined by "?(https?://[^"\s]+)"?$'
+    actions:
+      - declareActor: { id: '$1', role: 'SUT', endpoint: '$2', canonical: '$3' }
+      - assign: { to: '$1Base', value: '"$2"' }
+
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test (?:on|at) "?(https?://[^"\s]+)"?$'
+    actions:
+      - declareActor: { id: '$1', role: 'SUT', endpoint: '$2' }
+      - assign: { to: '$1Base', value: '"$2"' }
+
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test as defined by "?(https?://[^"\s]+)"?$'
+    actions:
+      - declareActor: { id: '$1', role: 'SUT', canonical: '$2' }
+
   - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test$'
     actions:
-      - declareActor:
-          id: '$1'
-          role: 'SUT'
+      - declareActor: { id: '$1', role: 'SUT' }
 
-  # Declare the SUT with endpoint URL
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test on (https?://\S+)$'
-    actions:
-      - declareActor:
-          id: '$1'
-          role: 'SUT'
-          endpoint: '$2'
+  # -- Available actors (most specific first) --
 
-  # Declare the SUT with canonical definition
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test as defined by (https?://\S+)$'
-    actions:
-      - declareActor:
-          id: '$1'
-          role: 'SUT'
-          canonical: '$2'
-
-  # Declare the SUT with endpoint URL and canonical definition
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test on (https?://\S+) as defined by (https?://\S+)$'
-    actions:
-      - declareActor:
-          id: '$1'
-          role: 'SUT'
-          endpoint: '$2'
-          canonical: '$3'
-
-  # Declare an available service/actor (bare)
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is available$'
-    actions:
-      - declareActor:
-          id: '$1'
-
-  # Declare an actor with endpoint URL (accepts "on" or "at", quoted or unquoted)
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is available (?:on|at) "?(https?://[^"\s]+)"?$'
-    actions:
-      - declareActor:
-          id: '$1'
-          endpoint: '$2'
-      - assign:
-          to: '$1Base'
-          value: '"$2"'
-
-  # Declare an actor with canonical definition
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is available as defined by "?(https?://[^"\s]+)"?$'
-    actions:
-      - declareActor:
-          id: '$1'
-          canonical: '$2'
-
-  # Declare an actor with endpoint URL and canonical definition
   - match: '^([A-Za-z][A-Za-z0-9_]*) is available (?:on|at) "?(https?://[^"\s]+)"? as defined by "?(https?://[^"\s]+)"?$'
     actions:
-      - declareActor:
-          id: '$1'
-          endpoint: '$2'
-          canonical: '$3'
-      - assign:
-          to: '$1Base'
-          value: '"$2"'
+      - declareActor: { id: '$1', endpoint: '$2', canonical: '$3' }
+      - assign: { to: '$1Base', value: '"$2"' }
 
-  # Declare an actor with a descriptive name
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is available (?:on|at) "?(https?://[^"\s]+)"?$'
+    actions:
+      - declareActor: { id: '$1', endpoint: '$2' }
+      - assign: { to: '$1Base', value: '"$2"' }
+
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is available as defined by "?(https?://[^"\s]+)"?$'
+    actions:
+      - declareActor: { id: '$1', canonical: '$2' }
+
   - match: '^([A-Za-z][A-Za-z0-9_]*) is available as "([^"]+)"$'
     actions:
-      - declareActor:
-          id: '$1'
-          name: '$2'
+      - declareActor: { id: '$1', name: '$2' }
 
-  # ------------------------------------------------------------------
-  # SETUP / BACKGROUND
-  # ------------------------------------------------------------------
-
-  # Setup / Background — set FHIR headers and server base URL
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is configured$'
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is available$'
     actions:
-      - assign:
-          to: 'fhirHeaders{Content-Type}'
-          value: '"application/fhir+json"'
-      - assign:
-          to: 'fhirHeaders{Accept}'
-          value: '"application/fhir+json"'
-      - assign:
-          to: 'fhirServerBase'
-          value: '"http://fhir-server:8080/fhir"'
-      - log: 'concat("Configured ", "$1", " — FHIR server at ", $fhirServerBase)'
+      - declareActor: { id: '$1' }
 
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is configured with data pool "([^"]+)"$'
-    actions:
-      - assign:
-          to: 'fhirHeaders{Content-Type}'
-          value: '"application/fhir+json"'
-      - assign:
-          to: 'fhirHeaders{Accept}'
-          value: '"application/fhir+json"'
-      - assign:
-          to: 'fhirServerBase'
-          value: '"http://fhir-server:8080/fhir"'
-      - assign:
-          to: 'dataPool'
-          value: '"$2"'
-      - log: 'concat("Configured ", "$1", " with data pool ", $dataPool)'
+  # ==================================================================
+  # 2. HTTP
+  # ==================================================================
+  # Doc: <Actor> calls <Actor> at "<path>" [with: (docstring)]
+  # Doc: fetch "<url>" as "<variable>"
 
-  # ------------------------------------------------------------------
-  # SERVER: happy path – Register allergy and verify
-  # ------------------------------------------------------------------
-
-  # Actor registers an allergy (implicit target)
-  - match: '^([A-Za-z][A-Za-z0-9_]*) registers an allergy with:$'
-    table:
-      required: [code.coding.code, code.coding.display, code.text, reaction.code, reaction.display]
-    actions:
-      - assign:
-          to: 'allergyBody'
-          value: >-
-            concat('{"resourceType":"AllergyIntolerance","code":{"coding":[{"system":"http://snomed.info/sct","code":"',
-            "$row.code.coding.code",
-            '","display":"',
-            "$row.code.coding.display",
-            '"}],"text":"',
-            "$row.code.text",
-            '"},"reaction":[{"manifestation":[{"coding":[{"system":"http://snomed.info/sct","code":"',
-            "$row.reaction.code",
-            '","display":"',
-            "$row.reaction.display",
-            '"}]}]}]}')
-      - log: 'concat("[REQ] POST AllergyIntolerance: ", $allergyBody)'
-      - send:
-          id: 'lastRequest'
-          desc: 'Register AllergyIntolerance resource'
-          handler: 'HttpMessagingV2'
-          from: '$1'
-          inputs:
-            uri: 'concat($fhirServerBase, "/AllergyIntolerance")'
-            method: '"POST"'
-            headers: '$fhirHeaders'
-            body: '$allergyBody'
-      - log: 'concat("[RESP] Register allergy status: ", $lastRequest{response}{status})'
-      - verify:
-          handler: 'NumberValidator'
-          desc: 'Register allergy returns HTTP 201'
-          inputs:
-            actualnumber: '$lastRequest{response}{status}'
-            expectednumber: '"201"'
-      - process:
-          handler: 'JsonPointerProcessor'
-          operation: 'process'
-          output: 'lastRegistered'
-          inputs:
-            content: '$lastRequest{response}{body}'
-            pointer: '"/id"'
-      - log: 'concat("[INFO] Registered allergy ID: ", $lastRegistered)'
-
-  # Actor registers an allergy on a specific target
-  - match: '^([A-Za-z][A-Za-z0-9_]*) registers an allergy on ([A-Za-z][A-Za-z0-9_]*) with:$'
-    table:
-      required: [code.coding.code, code.coding.display, code.text, reaction.code, reaction.display]
-    actions:
-      - assign:
-          to: 'allergyBody'
-          value: >-
-            concat('{"resourceType":"AllergyIntolerance","code":{"coding":[{"system":"http://snomed.info/sct","code":"',
-            "$row.code.coding.code",
-            '","display":"',
-            "$row.code.coding.display",
-            '"}],"text":"',
-            "$row.code.text",
-            '"},"reaction":[{"manifestation":[{"coding":[{"system":"http://snomed.info/sct","code":"',
-            "$row.reaction.code",
-            '","display":"',
-            "$row.reaction.display",
-            '"}]}]}]}')
-      - log: 'concat("[REQ] POST AllergyIntolerance to $2: ", $allergyBody)'
-      - send:
-          id: 'lastRequest'
-          desc: 'Register AllergyIntolerance resource'
-          handler: 'HttpMessagingV2'
-          from: '$1'
-          to: '$2'
-          inputs:
-            uri: 'concat($fhirServerBase, "/AllergyIntolerance")'
-            method: '"POST"'
-            headers: '$fhirHeaders'
-            body: '$allergyBody'
-      - log: 'concat("[RESP] Register allergy status: ", $lastRequest{response}{status})'
-      - verify:
-          handler: 'NumberValidator'
-          desc: 'Register allergy returns HTTP 201'
-          inputs:
-            actualnumber: '$lastRequest{response}{status}'
-            expectednumber: '"201"'
-      - process:
-          handler: 'JsonPointerProcessor'
-          operation: 'process'
-          output: 'lastRegistered'
-          inputs:
-            content: '$lastRequest{response}{body}'
-            pointer: '"/id"'
-
-  - match: '^save the returned identifier as "([A-Za-z_][A-Za-z0-9_]*)"$'
-    actions:
-      - assign:
-          to: '$1'
-          value: '$lastRegistered'
-
-  - match: "^the patient's registered allergies should include:$"
-    table:
-      required: [code, identifier]
-    actions:
-      - send:
-          id: 'lastRequest'
-          desc: 'Search AllergyIntolerance resources'
-          handler: 'HttpMessagingV2'
-          inputs:
-            uri: 'concat($fhirServerBase, "/AllergyIntolerance")'
-            method: '"GET"'
-            headers: '$fhirHeaders'
-      - verify:
-          handler: 'NumberValidator'
-          desc: 'Search returns HTTP 200'
-          inputs:
-            actualnumber: '$lastRequest{response}{status}'
-            expectednumber: '"200"'
-      - log: 'concat("[RESP] AllergyIntolerance search: ", $lastRequest{response}{body})'
-      - foreach:
-          from: '$tableRows'
-          do:
-            - verify:
-                handler: 'ExpressionValidator'
-                desc: 'Response contains expected allergy code'
-                inputs:
-                  expression: 'contains($lastRequest{response}{body}, "$row.code")'
-
-  # ------------------------------------------------------------------
-  # SERVER/CLIENT: create + submit + status/OO checks (invalid flow too)
-  # ------------------------------------------------------------------
-
-  # Actor creates an allergy resource (with configurable resourceType)
-  - match: '^([A-Za-z][A-Za-z0-9_]*) creates an allergy resource with:$'
-    table:
-      required: [resourceType, code.coding.code, code.coding.display, code.text, reaction.code, reaction.display]
-    actions:
-      - assign:
-          to: 'createdAllergyBody'
-          value: >-
-            concat('{"resourceType":"',
-            "$row.resourceType",
-            '","code":{"coding":[{"system":"http://snomed.info/sct","code":"',
-            "$row.code.coding.code",
-            '","display":"',
-            "$row.code.coding.display",
-            '"}],"text":"',
-            "$row.code.text",
-            '"},"reaction":[{"manifestation":[{"coding":[{"system":"http://snomed.info/sct","code":"',
-            "$row.reaction.code",
-            '","display":"',
-            "$row.reaction.display",
-            '"}]}]}]}')
-      - log: 'concat("[INFO] Created allergy resource: ", $createdAllergyBody)'
-
-  # Actor submits the created allergy (implicit target)
-  - match: '^([A-Za-z][A-Za-z0-9_]*) submits the created allergy$'
-    actions:
-      - log: 'concat("[REQ] POST AllergyIntolerance: ", $createdAllergyBody)'
-      - send:
-          id: 'lastRequest'
-          desc: 'Submit AllergyIntolerance to FHIR server'
-          handler: 'HttpMessagingV2'
-          from: '$1'
-          inputs:
-            uri: 'concat($fhirServerBase, "/AllergyIntolerance")'
-            method: '"POST"'
-            headers: '$fhirHeaders'
-            body: '$createdAllergyBody'
-      - log: 'concat("[RESP] Submit allergy status: ", $lastRequest{response}{status})'
-
-  # Actor submits the created allergy to a named target
-  - match: '^([A-Za-z][A-Za-z0-9_]*) submits the created allergy to ([A-Za-z][A-Za-z0-9_]*)$'
-    actions:
-      - log: 'concat("[REQ] POST AllergyIntolerance: ", $createdAllergyBody)'
-      - send:
-          id: 'lastRequest'
-          desc: 'Submit AllergyIntolerance to FHIR server'
-          handler: 'HttpMessagingV2'
-          from: '$1'
-          to: '$2'
-          inputs:
-            uri: 'concat($fhirServerBase, "/AllergyIntolerance")'
-            method: '"POST"'
-            headers: '$fhirHeaders'
-            body: '$createdAllergyBody'
-      - log: 'concat("[RESP] Submit allergy status: ", $lastRequest{response}{status})'
-
-  - match: '^the response status should be "([0-9]{3})"$'
-    actions:
-      - verify:
-          handler: 'NumberValidator'
-          desc: 'Verify HTTP response status'
-          inputs:
-            actualnumber: '$lastRequest{response}{status}'
-            expectednumber: '"$1"'
-
-  # Accept multiple status codes with "or": the response status should be "422" or "400" or "500"
-  # Also supports list syntax: the response status should be in ["422", "400", "500"]
-  - match: '^the response status should be ("[0-9]{3}"(?:\s+or\s+"[0-9]{3}")*)$'
-    actions:
-      - verify:
-          handler: 'ExpressionValidator'
-          desc: 'Verify HTTP response status is one of expected values'
-          inputs:
-            expression: '$statusOrExpr'
-
-  - match: '^the response status should be in \[("[0-9]{3}"(?:\s*,\s*"[0-9]{3}")*)\]$'
-    actions:
-      - verify:
-          handler: 'ExpressionValidator'
-          desc: 'Verify HTTP response status is one of expected values'
-          inputs:
-            expression: '$statusOrExpr'
-
-  - match: '^the OperationOutcome at "(.+)" should be "(.+)"$'
-    actions:
-      - process:
-          handler: 'JsonPointerProcessor'
-          operation: 'process'
-          output: 'jsonValue'
-          inputs:
-            content: '$lastRequest{response}{body}'
-            pointer: '"$1"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify OperationOutcome value'
-          inputs:
-            actualstring: '$jsonValue'
-            expectedstring: '"$2"'
-
-  # Convenience phrase for POST+201 check
-  - match: '^the resource is correctly uploaded to the server$'
-    actions:
-      - verify:
-          handler: 'NumberValidator'
-          desc: 'Verify 201 Created'
-          inputs:
-            actualnumber: '$lastRequest{response}{status}'
-            expectednumber: '"201"'
-
-  # ------------------------------------------------------------------
-  # CLIENT / MANUAL FLOWS (GF4, GF5, GF7, GF9)
-  # ------------------------------------------------------------------
-  - match: '^the monitor is instructed to review the submission$'
-    actions:
-      - call:
-          path: scriptlets/instructUser.xml
-          inputs:
-            step: '"monitorReview"'
-            message: '"Please review the latest submission and approve or reject."'
-      - process:
-          handler: MonitorApprovalProcessor
-          operation: await
-          output: monitorDecision
-          inputs:
-            timeoutSeconds: '60'
-
-  - match: '^the monitor marks the submission as "(Pass|Fail)"$'
-    actions:
-      - process:
-          handler: 'MonitorApprovalProcessor'
-          operation: 'await'
-          output: 'monitorDecision'
-          inputs:
-            timeoutSeconds: '60'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify monitor decision'
-          inputs:
-            actualstring: '$monitorDecision'
-            expectedstring: '"$1"'
-
-  # GF4 – Prompt tester (user) to do something (Karate: informUser)
-  - match: '^inform the user "(.+)"$'
-    actions:
-      - call:
-          path: scriptlets/instructUser.xml
-          inputs:
-            step: '"informUser"'
-            message: '"$1"'
-
-  # GF5 – Prompt monitor (Karate: informMonitor)
-  - match: '^inform the monitor "(.+)"$'
-    actions:
-      - call:
-          path: scriptlets/instructUser.xml
-          inputs:
-            step: '"informMonitor"'
-            message: '"$1"'
-
-  # GF7 / GF9 – Poll for monitor validation result (Pass/Fail)
-  - match: '^wait for monitor validation within ([0-9]+) seconds$'
-    actions:
-      - process:
-          handler: 'MonitorApprovalProcessor'
-          operation: 'await'
-          output: 'monitorDecision'
-          inputs:
-            timeoutSeconds: '$1'
-
-  # ------------------------------------------------------------------
-  # FHIR VALIDATION (GF1, GF2, GF3)
-  # ------------------------------------------------------------------
-  # GF1 – Validate the last submission payload (or created resource) against a profile URL
-  - match: '^validate against (https?://.+)$'
-    actions:
-      - process:
-          handler: 'FHIRValidator'
-          operation: 'validate'
-          output: 'validationOutcome'
-          inputs:
-            content: '$submitResult{payload}'
-            profileUrl: '"$1"'
-
-  # GF1 – Actor-targeted: "the validator validates it against <url>"
-  - match: '^the ([A-Za-z][A-Za-z0-9_]*) validates it against (https?://.+)$'
-    actions:
-      - process:
-          handler: 'FHIRValidator'
-          operation: 'validate'
-          output: 'validationOutcome'
-          to: '$1'
-          inputs:
-            content: '$submitResult{payload}'
-            profileUrl: '"$2"'
-
-  # GF2 – "Simplified" view over OperationOutcome (errors/warnings counts)
-  - match: '^the validation summary (?:should )?shows? ([0-9]+) errors? and ([0-9]+) warnings?$'
-    actions:
-      - process:
-          handler: 'ValidationResultsProcessor'
-          operation: 'summarize'
-          output: 'validationSummary'
-          inputs:
-            outcome: '$validationOutcome'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Errors count'
-          inputs:
-            actualstring: '$validationSummary{errors}'
-            expectedstring: '"$1"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Warnings count'
-          inputs:
-            actualstring: '$validationSummary{warnings}'
-            expectedstring: '"$2"'
-
-  # GF3 – FHIRPath evaluation against last payload
-  - match: '^evaluate FHIRPath "([^"]+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
-    actions:
-      - process:
-          handler: FHIRPathProcessor
-          operation: evaluate
-          output: codes
-          inputs:
-            content: '$submitResult{payload}'
-            expression: '"$1"'
-    requires:
-      service: FHIR-validator
-      version: ">=1.0"
-
-  # ------------------------------------------------------------------
-  # PROXY TRAFFIC / POLLING (GF8)
-  # ------------------------------------------------------------------
-  # Get baseline traffic count
-  - match: '^capture initial traffic count$'
-    actions:
-      - process:
-          handler: 'ProxyTrafficProcessor'
-          operation: 'baseline'
-          output: 'initialFlowsLength'
-          inputs: {}
-
-  # Wait for a request (methods list + contains string filter or FHIRPath list)
-  - match: '^wait for a new request with methods "(.+)" and filter "(.+)" within ([0-9]+) seconds every ([0-9]+) seconds$'
-    actions:
-      - process:
-          handler: 'ProxyTrafficProcessor'
-          operation: 'waitForRequest'
-          output: 'newResponse'
-          inputs:
-            baselineCount: '$initialFlowsLength'
-            timeoutSeconds: '$3'
-            pollingIntervalSeconds: '$4'
-            methods: '"$1"'
-            filter: '"$2"'
-
-  # ------------------------------------------------------------------
-  # WAIT FOR CALL TO ACTOR
-  # ------------------------------------------------------------------
-  # Wait for any call to be submitted to a named actor
-  - match: '^wait for a call to "([^"]+)" within ([0-9]+) seconds$'
-    actions:
-      - process:
-          handler: 'ActorCallProcessor'
-          operation: 'await'
-          output: 'actorCallResult'
-          inputs:
-            actor: '"$1"'
-            timeoutSeconds: '$2'
-
-  # Wait for a call matching a specific pattern to be submitted to a named actor
-  - match: '^wait for a call matching "([^"]+)" to "([^"]+)" within ([0-9]+) seconds$'
-    actions:
-      - process:
-          handler: 'ActorCallProcessor'
-          operation: 'awaitMatching'
-          output: 'actorCallResult'
-          inputs:
-            pattern: '"$1"'
-            actor: '"$2"'
-            timeoutSeconds: '$3'
-
-  # ------------------------------------------------------------------
-  # FILE/UPLOAD POLLING (GF6)
-  # ------------------------------------------------------------------
-  - match: '^wait for upload submission with id "([^"]+)" within ([0-9]+) seconds every ([0-9]+) seconds$'
-    actions:
-      - process:
-          handler: 'UploadSubmissionProcessor'
-          operation: 'await'
-          output: 'uploadResponse'
-          inputs:
-            submissionId: '"$1"'
-            timeoutSeconds: '$2'
-            pollingIntervalSeconds: '$3'
-      - verify:
-          handler: 'NullCheck'
-          desc: 'Upload response exists'
-          inputs:
-            actualstring: '$uploadResponse{filename}'
-            expectedstring: '"not-null"'
-
-  # ------------------------------------------------------------------
-  # GENERIC HTTP STEPS (actor-relative, reusable across features)
-  # ------------------------------------------------------------------
-
-  # Actor calls Actor at "/path" with: (docstring body) — JSON POST
-  # If the docstring contains $var references, the parser auto-generates
-  # TemplateProcessor steps to interpolate them before the send.
+  # Actor-to-actor request with relative path and JSON body
   - match: '^([A-Za-z][A-Za-z0-9_]*) calls ([A-Za-z][A-Za-z0-9_]*) at "([^"]+)" with:$'
     actions:
-      - assign:
-          to: 'jsonHeaders{Content-Type}'
-          value: '"application/json"'
-      - assign:
-          to: 'jsonHeaders{Accept}'
-          value: '"application/json"'
+      - assign: { to: 'jsonHeaders{Content-Type}', value: '"application/json"' }
+      - assign: { to: 'jsonHeaders{Accept}', value: '"application/json"' }
       - send:
           id: 'lastRequest'
-          desc: 'POST JSON request'
+          desc: 'POST JSON'
           handler: 'HttpMessagingV2'
           from: '$1'
           to: '$2'
@@ -580,99 +91,13 @@ steps:
             headers: '$jsonHeaders'
             body: '$docString'
 
-  # Backwards compat: Actor sends JSON POST to a full URL with: (docstring)
-  - match: '^([A-Za-z][A-Za-z0-9_]*) sends (?:a )?(?:HCERT )?(?:decode |JSON )?(?:request |POST )?to "([^"]+)" with:$'
-    actions:
-      - assign:
-          to: 'jsonHeaders{Content-Type}'
-          value: '"application/json"'
-      - assign:
-          to: 'jsonHeaders{Accept}'
-          value: '"application/json"'
-      - send:
-          id: 'lastRequest'
-          desc: 'POST JSON request'
-          handler: 'HttpMessagingV2'
-          from: '$1'
-          inputs:
-            uri: '"$2"'
-            method: '"POST"'
-            headers: '$jsonHeaders'
-            body: '$docString'
-
-  # Extract a JSON pointer value from the last response
-  # Accepts: extract "/path" as "var" OR extract "/path" from the response as "var"
-  - match: '^extract "([^"]+)" (?:from the response )?as "([A-Za-z_][A-Za-z0-9_]*)"$'
-    actions:
-      - process:
-          handler: 'JsonPointerProcessor'
-          operation: 'process'
-          output: '$2'
-          inputs:
-            content: '$lastRequest{response}{body}'
-            pointer: '"$1"'
-
-  # Assert a named variable equals an expected string value
-  # Accepts: "var" should be "val" OR the value of "var" should be "val"
-  - match: '^(?:the value of )?"([A-Za-z_][A-Za-z0-9_]*)" should be "([^"]+)"$'
-    actions:
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify variable value'
-          inputs:
-            actualstring: '$$1'
-            expectedstring: '"$2"'
-
-  # ==================================================================
-  # Domain-specific steps are provided by component language extensions
-  # in public/components/<id>/steps.yml and merged at runtime.
-  # ==================================================================
-
-  # ==================================================================
-  # INLINE RESOURCE ASSIGNMENT (doc string support)
-  # ==================================================================
-
-  # Define a resource variable from an inline JSON doc string
-  - match: '^define resource "([A-Za-z_][A-Za-z0-9_]*)" as:$'
-    actions:
-      - assign:
-          to: '$1'
-          value: '$docString'
-
-  # ------------------------------------------------------------------
-  # USER UPLOAD — prompt the user to upload a JSON resource file
-  # ------------------------------------------------------------------
-  - match: '^([A-Za-z][A-Za-z0-9_]*) uploads a resource as "([A-Za-z_][A-Za-z0-9_]*)"$'
-    actions:
-      - declareVariable:
-          name: '$2'
-          varType: 'string'
-      - interact:
-          id: 'uploadResource'
-          desc: 'Upload a FHIR resource'
-          inputTitle: 'Provide resource'
-          requests:
-            - desc: 'Upload a JSON resource file:'
-              name: '$2'
-              inputType: 'UPLOAD'
-              required: true
-              variable: '$$2'
-
-  # Assign a simple string value to a variable
-  - match: '^set "([A-Za-z_][A-Za-z0-9_]*)" to "([^"]+)"$'
-    actions:
-      - assign:
-          to: '$1'
-          value: '"$2"'
-
-  # ------------------------------------------------------------------
-  # HTTP GET — fetch a URL and store response body in a variable
-  # ------------------------------------------------------------------
+  # Fetch a URL (GET) and store the response body
   - match: '^fetch "([^"]+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
     actions:
+      - assign: { to: 'jsonHeaders{Accept}', value: '"application/json"' }
       - send:
           id: 'lastRequest'
-          desc: 'GET external resource'
+          desc: 'GET'
           handler: 'HttpMessagingV2'
           inputs:
             uri: '"$1"'
@@ -680,17 +105,189 @@ steps:
             headers: '$jsonHeaders'
       - verify:
           handler: 'NumberValidator'
-          desc: 'Fetch returns HTTP 200'
-          inputs:
-            actualnumber: '$lastRequest{response}{status}'
-            expectednumber: '"200"'
-      - assign:
-          to: '$2'
-          value: '$lastRequest{response}{body}'
+          desc: 'HTTP 200'
+          inputs: { actualnumber: '$lastRequest{response}{status}', expectednumber: '"200"' }
+      - assign: { to: '$2', value: '$lastRequest{response}{body}' }
 
-  # ------------------------------------------------------------------
-  # DEBUG / LOG — emit a log line visible in ITB step reports
-  # ------------------------------------------------------------------
+  # ==================================================================
+  # 3. VARIABLES & DATA
+  # ==================================================================
+  # Doc: set "<variable>" to "<value>"
+  # Doc: set "<variable>" to: (docstring)
+  # Doc: extract "<jsonPointer>" [from "<variable>"] as "<variable>"
+
+  # Set variable to string
+  - match: '^set "([A-Za-z_][A-Za-z0-9_]*)" to "([^"]+)"$'
+    actions:
+      - assign: { to: '$1', value: '"$2"' }
+
+  # Set variable to docstring (inline JSON etc.)
+  - match: '^set "([A-Za-z_][A-Za-z0-9_]*)" to:$'
+    actions:
+      - assign: { to: '$1', value: '$docString' }
+
+  # Legacy alias
+  - match: '^define resource "([A-Za-z_][A-Za-z0-9_]*)" as:$'
+    actions:
+      - assign: { to: '$1', value: '$docString' }
+
+  # Extract from a named variable (must be before the shorter pattern)
+  - match: '^extract "([^"]+)" from "([A-Za-z_][A-Za-z0-9_]*)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: '$3'
+          inputs: { content: '$$2', pointer: '"$1"' }
+
+  # Extract from the last response
+  - match: '^extract "([^"]+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: '$2'
+          inputs: { content: '$lastRequest{response}{body}', pointer: '"$1"' }
+
+  # ==================================================================
+  # 4. ASSERTIONS
+  # ==================================================================
+  # Doc: "<variable>" should be "<value>"
+  # Doc: "<variable>" should contain "<substring>"
+  # Doc: "<variable>" should not be empty
+  # Doc: the response status should be "<code>" [or "<code>"...]
+  # Doc: the validation has <n> errors and <n> warnings
+
+  - match: '^(?:the value of )?"([A-Za-z_][A-Za-z0-9_]*)" should be "([^"]+)"$'
+    actions:
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Equals'
+          inputs: { actualstring: '$$1', expectedstring: '"$2"' }
+
+  - match: '^(?:the value of )?"([A-Za-z_][A-Za-z0-9_]*)" should contain "([^"]+)"$'
+    actions:
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Contains'
+          inputs: { actualstring: '$$1', expectedstring: '"$2"', matchType: '"contains"' }
+
+  - match: '^(?:the value of )?"([A-Za-z_][A-Za-z0-9_]*)" should not be empty$'
+    actions:
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Not empty'
+          inputs: { actualstring: '$$1', expectedstring: '"not-null"' }
+
+  - match: '^the response status should be "([0-9]{3})"$'
+    actions:
+      - verify:
+          handler: 'NumberValidator'
+          desc: 'HTTP status'
+          inputs: { actualnumber: '$lastRequest{response}{status}', expectednumber: '"$1"' }
+
+  - match: '^the response status should be ("[0-9]{3}"(?:\s+or\s+"[0-9]{3}")*)$'
+    actions:
+      - verify:
+          handler: 'ExpressionValidator'
+          desc: 'HTTP status one of'
+          inputs: { expression: '$statusOrExpr' }
+
+  - match: '^the response status should be in \[("[0-9]{3}"(?:\s*,\s*"[0-9]{3}")*)\]$'
+    actions:
+      - verify:
+          handler: 'ExpressionValidator'
+          desc: 'HTTP status one of'
+          inputs: { expression: '$statusOrExpr' }
+
+  - match: '^the validation has ([0-9]+) errors? and ([0-9]+) warnings?$'
+    actions:
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Error count'
+          inputs: { actualstring: '$validationErrors', expectedstring: '"$1"' }
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Warning count'
+          inputs: { actualstring: '$validationWarnings', expectedstring: '"$2"' }
+
+  # ==================================================================
+  # 5. USER & MONITOR INTERACTION
+  # ==================================================================
+  # Doc: inform <user|monitor> "<message>"
+  # Doc: ask <user|monitor> for "<variable>" [with prompt "<description>"]
+  # Doc: monitor is asked to review ["<content>"] with "<message>"
+
+  - match: '^inform (?:the )?user "(.+)"$'
+    actions:
+      - call:
+          path: scriptlets/instructUser.xml
+          inputs: { step: '"informUser"', message: '"$1"' }
+
+  - match: '^inform (?:the )?monitor "(.+)"$'
+    actions:
+      - call:
+          path: scriptlets/instructUser.xml
+          inputs: { step: '"informMonitor"', message: '"$1"' }
+
+  - match: '^ask user for "([A-Za-z_][A-Za-z0-9_]*)" with prompt "([^"]+)"$'
+    actions:
+      - declareVariable: { name: '$1', varType: 'string' }
+      - interact:
+          id: 'askUser'
+          desc: '$2'
+          inputTitle: '$2'
+          requests:
+            - { desc: '$2', name: '$1', inputType: 'UPLOAD', required: true, variable: '$$1' }
+
+  - match: '^ask user for "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - declareVariable: { name: '$1', varType: 'string' }
+      - interact:
+          id: 'askUser'
+          desc: 'Provide input'
+          inputTitle: 'Provide input'
+          requests:
+            - { desc: 'Provide input:', name: '$1', inputType: 'UPLOAD', required: true, variable: '$$1' }
+
+  - match: '^ask monitor for "([A-Za-z_][A-Za-z0-9_]*)" with prompt "([^"]+)"$'
+    actions:
+      - declareVariable: { name: '$1', varType: 'string' }
+      - interact:
+          id: 'askMonitor'
+          desc: '$2'
+          inputTitle: '$2'
+          requests:
+            - { desc: '$2', name: '$1', inputType: 'UPLOAD', required: true, variable: '$$1' }
+
+  - match: '^ask monitor for "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - declareVariable: { name: '$1', varType: 'string' }
+      - interact:
+          id: 'askMonitor'
+          desc: 'Provide input'
+          inputTitle: 'Provide input'
+          requests:
+            - { desc: 'Provide input:', name: '$1', inputType: 'UPLOAD', required: true, variable: '$$1' }
+
+  - match: '^(?:the )?monitor is asked to review "([^"]+)" with "([^"]+)"$'
+    actions:
+      - call:
+          path: scriptlets/instructUser.xml
+          inputs: { step: '"monitorReview"', content: '"$1"', message: '"$2"' }
+
+  - match: '^(?:the )?monitor is asked to review with "([^"]+)"$'
+    actions:
+      - call:
+          path: scriptlets/instructUser.xml
+          inputs: { step: '"monitorReview"', message: '"$1"' }
+
+  # ==================================================================
+  # 6. LOGGING
+  # ==================================================================
+  # Doc: log "<message>"
+  # Doc: log "<variable>"
+
   - match: '^log "([^"]+)"$'
     actions:
       - log: '"$1"'
@@ -698,38 +295,3 @@ steps:
   - match: '^log variable "([A-Za-z_][A-Za-z0-9_]*)"$'
     actions:
       - log: 'concat("$1 = ", $$1)'
-
-  # ==================================================================
-  # VARIABLE VALUE ASSERTIONS
-  # ==================================================================
-
-  # Assert that a named variable equals a specific value
-  - match: '^the value of "([A-Za-z_][A-Za-z0-9_]*)" is "([^"]+)"$'
-    actions:
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify variable value'
-          inputs:
-            actualstring: '$$1'
-            expectedstring: '"$2"'
-
-  # Assert that a named variable contains a substring
-  - match: '^the value of "([A-Za-z_][A-Za-z0-9_]*)" contains "([^"]+)"$'
-    actions:
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify variable contains value'
-          inputs:
-            actualstring: '$$1'
-            expectedstring: '"$2"'
-            matchType: '"contains"'
-
-  # Assert that a named variable is not empty
-  - match: '^the value of "([A-Za-z_][A-Za-z0-9_]*)" is not empty$'
-    actions:
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify variable is not empty'
-          inputs:
-            actualstring: '$$1'
-            expectedstring: '"not-null"'

@@ -3,8 +3,8 @@ Feature: Test data generation with data tables
   Background:
     Given Client is the system under test
     And FHIRServer is available
-    And FHIRServer is configured
-    And load implementation guide "hl7.fhir.us.core#5.0.1"
+    And FHIRValidator is available
+    And FHIRValidator is loaded with package "hl7.fhir.us.core#5.0.1"
 
   Scenario: Generate and validate Patient test data
     Given define mappings "mappings":

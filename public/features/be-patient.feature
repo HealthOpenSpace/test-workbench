@@ -6,8 +6,8 @@ Feature: Belgian Patient: IG load, test data generation, validation, match, and 
   Background:
     Given Client is the system under test
     And FHIRServer is available
-    And FHIRServer is configured
-    And load implementation guide "hl7.fhir.be.core#2.1.2" and verify
+    And FHIRValidator is available
+    And FHIRValidator is loaded with package "hl7.fhir.be.core#2.1.2"
 
   Scenario: be-patient-001 Generate, validate, match, and FHIRPath
 

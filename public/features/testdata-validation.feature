@@ -6,8 +6,8 @@ Feature: Test data generation, validation, FHIRPath, and match
   Background:
     Given Client is the system under test
     And FHIRServer is available
-    And FHIRServer is configured
-    And load implementation guide "hl7.fhir.us.core#5.0.1"
+    And FHIRValidator is available
+    And FHIRValidator is loaded with package "hl7.fhir.us.core#5.0.1"
 
   # ---------------------------------------------------------------
   # Test Data Generation with Karate-style data tables

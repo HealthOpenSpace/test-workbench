@@ -7,14 +7,14 @@ Feature: Belgian Vaccination (BeVaccination) profile validation
   Background:
     Given User is the system under test
     And FHIRValidator is available at "http://itb-fhir-validator:8081"
-    And FHIRValidator is preloaded with package hl7.fhir.be.vaccination#1.1.2
+    And FHIRValidator is loaded with package "hl7.fhir.be.vaccination#1.1.2"
 
   Scenario: be-vaccination-001 Validate BeVaccination business rules
 
     # ==================================================================
     # Step 1: Upload — User provides a BeVaccination (Immunization) JSON
     # ==================================================================
-    Given User uploads a resource as "immunizationResource"
+    Given ask user for "immunizationResource" with prompt "Upload a BeVaccination Immunization JSON"
     Then the "immunizationResource" resource type should be "Immunization"
 
     # ==================================================================

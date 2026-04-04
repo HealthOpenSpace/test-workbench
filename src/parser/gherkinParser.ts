@@ -222,7 +222,7 @@ export class GherkinParser {
   /** Expand a single step to IR actions using the language catalog */
   expandStep(step: Step): { actions: IRAction[]; mappingLabel?: string; issues: ParseIssue[] } {
     const issues: ParseIssue[] = [];
-    const text = step.text.trim();
+    const text = normalizeSpaces(step.text.trim());
 
     if (!this.catalog) {
       issues.push({ line: step.line, severity: 'error', message: 'Language catalog not loaded' });
@@ -294,7 +294,7 @@ export class GherkinParser {
       return null;
     }
     for (const entry of this.catalog.steps) {
-      if (new RegExp(entry.match, 'i').test(text.trim())) {
+      if (new RegExp(entry.match, 'i').test(normalizeSpaces(text.trim()))) {
         return entry.match.replace(/^\^|\$$/g, '');
       }
     }
@@ -565,6 +565,29 @@ function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
 }
 
 /** Semver helpers (very small, supports >=, >, =, <=, < with x.y[.z]) */
+/** Normalize multiple spaces to single, but preserve whitespace inside quotes */
+function normalizeSpaces(s: string): string {
+  const parts: string[] = [];
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === '"') {
+      // Find closing quote
+      const end = s.indexOf('"', i + 1);
+      if (end > i) {
+        parts.push(s.slice(i, end + 1));
+        i = end + 1;
+        continue;
+      }
+    }
+    // Outside quotes — collapse whitespace
+    let j = i;
+    while (j < s.length && s[j] !== '"') j++;
+    parts.push(s.slice(i, j).replace(/\s+/g, ' '));
+    i = j;
+  }
+  return parts.join('');
+}
+
 function satisfies(actual: string, requirement: string): boolean {
   // requirement examples: ">=1.0", ">2.0.1", "1.3.0", "<=2.1"
   const m = requirement.match(/^\s*(>=|<=|>|<|=)?\s*([0-9]+(?:\.[0-9]+){0,2})\s*$/);

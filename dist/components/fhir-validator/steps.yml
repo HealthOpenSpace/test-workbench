@@ -10,66 +10,11 @@ description: >
 
 steps:
   # ==================================================================
-  # LOAD IMPLEMENTATION GUIDE
+  # PACKAGE LOADING (IG)
   # ==================================================================
 
-  - match: '^load implementation guide "([^"]+)"$'
-    actions:
-      - assign:
-          to: 'fhirValidatorHeaders{Content-Type}'
-          value: '"application/json"'
-      - assign:
-          to: 'fhirValidatorHeaders{Accept}'
-          value: '"application/json"'
-      - send:
-          id: 'lastRequest'
-          desc: 'Load IG into FHIR Validator'
-          handler: 'HttpMessagingV2'
-          inputs:
-            uri: 'concat($FHIRValidatorBase, "/api/validator/process")'
-            method: '"POST"'
-            headers: '$fhirValidatorHeaders'
-            body: "concat('{\"operation\":\"loadIG\",\"inputs\":{\"ig\":\"', \"$1\", '\"}}')"
-      - process:
-          handler: 'JsonPointerProcessor'
-          operation: 'process'
-          output: 'loadIGResult'
-          inputs:
-            content: '$lastRequest{response}{body}'
-            pointer: '"/output/severity"'
-
-  - match: '^load implementation guide "([^"]+)" and verify$'
-    actions:
-      - assign:
-          to: 'fhirValidatorHeaders{Content-Type}'
-          value: '"application/json"'
-      - assign:
-          to: 'fhirValidatorHeaders{Accept}'
-          value: '"application/json"'
-      - send:
-          id: 'lastRequest'
-          desc: 'Load IG into FHIR Validator'
-          handler: 'HttpMessagingV2'
-          inputs:
-            uri: 'concat($FHIRValidatorBase, "/api/validator/process")'
-            method: '"POST"'
-            headers: '$fhirValidatorHeaders'
-            body: "concat('{\"operation\":\"loadIG\",\"inputs\":{\"ig\":\"', \"$1\", '\"}}')"
-      - process:
-          handler: 'JsonPointerProcessor'
-          operation: 'process'
-          output: 'loadIGSeverity'
-          inputs:
-            content: '$lastRequest{response}{body}'
-            pointer: '"/output/severity"'
-      - verify:
-          handler: 'StringValidator'
-          desc: 'Verify IG loaded successfully'
-          inputs:
-            actualstring: '$loadIGSeverity'
-            expectedstring: '"information"'
-
-  - match: '^([A-Za-z][A-Za-z0-9_]*) is preloaded with package (\S+)$'
+  # <Actor> is loaded with package "<package>" — loads an IG into the validator
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is loaded with package "?(\S+?)"?$'
     actions:
       - assign:
           to: 'fhirValidatorHeaders{Content-Type}'
@@ -104,7 +49,143 @@ steps:
   # ==================================================================
   # VALIDATION
   # ==================================================================
+  # Documentation syntax:
+  #   validate "<resource>" against "<profiles>" [with best practice "<level>"] [with resource id "<rule>"]
+  # Always produces:
+  #   $validationOutcome  — raw OperationOutcome JSON
+  #   $validationErrors   — count of error-level issues (string)
+  #   $validationWarnings — count of warning-level issues (string)
+  #   $validationSeverity — highest severity across all issues
 
+  # Validate with best practice warnings
+  - match: '^validate "([^"]+)" against "([^"]+)" with best practice "([^"]+)"$'
+    actions:
+      - assign:
+          to: 'fhirValidatorHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'fhirValidatorHeaders{Accept}'
+          value: '"application/json"'
+      - assign:
+          to: 'validateTplParams{resource}'
+          value: '$$1'
+      - assign:
+          to: 'validateTplParams{profiles}'
+          value: '"$2"'
+      - assign:
+          to: 'validateTplParams{bpWarnings}'
+          value: '"$3"'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'validateBody'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'{ \"operation\": \"validate\", \"inputs\": { \"resource\": \"${resource?json_string}\", \"profiles\": \"${profiles}\", \"bpWarnings\": \"${bpWarnings}\" } }'"
+            parameters: '$validateTplParams'
+      - send:
+          id: 'lastRequest'
+          desc: 'Validate resource against profile'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: 'concat($FHIRValidatorBase, "/api/validator/process")'
+            method: '"POST"'
+            headers: '$fhirValidatorHeaders'
+            body: '$validateBody'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'validationOutcome'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/outcome"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'validationErrors'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/errors"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'validationWarnings'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/warnings"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'validationSeverity'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/severity"'
+
+  # Validate with resource ID rule
+  - match: '^validate "([^"]+)" against "([^"]+)" with resource id "([^"]+)"$'
+    actions:
+      - assign:
+          to: 'fhirValidatorHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'fhirValidatorHeaders{Accept}'
+          value: '"application/json"'
+      - assign:
+          to: 'validateTplParams{resource}'
+          value: '$$1'
+      - assign:
+          to: 'validateTplParams{profiles}'
+          value: '"$2"'
+      - assign:
+          to: 'validateTplParams{resourceIdRule}'
+          value: '"$3"'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'validateBody'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'{ \"operation\": \"validate\", \"inputs\": { \"resource\": \"${resource?json_string}\", \"profiles\": \"${profiles}\", \"resourceIdRule\": \"${resourceIdRule}\" } }'"
+            parameters: '$validateTplParams'
+      - send:
+          id: 'lastRequest'
+          desc: 'Validate resource against profile'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: 'concat($FHIRValidatorBase, "/api/validator/process")'
+            method: '"POST"'
+            headers: '$fhirValidatorHeaders'
+            body: '$validateBody'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'validationOutcome'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/outcome"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'validationErrors'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/errors"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'validationWarnings'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/warnings"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'validationSeverity'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/severity"'
+
+  # Validate (basic — no extra parameters)
   - match: '^validate "([^"]+)" against "([^"]+)"$'
     actions:
       - assign:
@@ -139,6 +220,13 @@ steps:
       - process:
           handler: 'JsonPointerProcessor'
           operation: 'process'
+          output: 'validationOutcome'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/outcome"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
           output: 'validationErrors'
           inputs:
             content: '$lastRequest{response}{body}'
@@ -150,6 +238,15 @@ steps:
           inputs:
             content: '$lastRequest{response}{body}'
             pointer: '"/output/warnings"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'validationSeverity'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/severity"'
+
+  # --- Validation result assertions ---
 
   - match: '^the validation should pass$'
     actions:

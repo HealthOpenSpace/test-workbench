@@ -7,7 +7,7 @@ Feature: Client submits allergies and a monitor validates them
     Given Client is the system under test on http://localhost:9000/fhir as defined by http://hl7.org/fhir/ActorDefinition/client
     And FHIRServer is available on http://hapi.fhir.org/baseR4 as defined by http://hl7.org/fhir/ActorDefinition/server
     And Validator is available as defined by http://hl7.org/fhir/ActorDefinition/validator
-    And Validator is preloaded with package hl7.fhir.be.allergy#1.1.2
+    And Validator is loaded with package "hl7.fhir.be.allergy#1.1.2"
     And FHIRServer is configured with data pool "default"
 
   # ------------------------------------------------------------------
