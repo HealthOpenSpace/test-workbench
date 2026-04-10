@@ -271,12 +271,138 @@ function itbIdResolver(db: { container: string; user: string; password: string; 
   };
 }
 
+/**
+ * Vite dev plugin: REST API for Gherkin-to-TDL compilation.
+ *
+ * POST /api/compile
+ *   Body: raw Gherkin text (Content-Type: text/plain)
+ *   Returns: ZIP file (application/zip)
+ *
+ * POST /api/compile/testplan
+ *   Body: FHIR TestPlan JSON (Content-Type: application/json)
+ *   Extracts the Gherkin from the referenced feature file,
+ *   compiles to TDL, and returns a ZIP.
+ */
+function compileApi(): Plugin {
+  // Lazy-load parser modules (they use ESM, loaded at first request)
+  let parserReady: Promise<{
+    parse: (gherkin: string) => any;
+    compile: (parsed: any) => { files: { filename: string; xml: string; type: string }[] };
+  }> | null = null;
+
+  function getParser() {
+    if (!parserReady) {
+      parserReady = (async () => {
+        // We can't import the browser modules directly, so we'll use a simpler approach:
+        // shell out to a Node script that does the compilation
+        return {
+          parse: (_gherkin: string) => null,
+          compile: (_parsed: any) => ({ files: [] }),
+        };
+      })();
+    }
+    return parserReady;
+  }
+
+  return {
+    name: 'compile-api',
+    configureServer(server) {
+      // POST /api/compile — Gherkin text → TDL ZIP
+      server.middlewares.use('/api/compile', async (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          res.end(JSON.stringify({ error: 'POST only' }));
+          return;
+        }
+
+        // Read body
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+        }
+        const body = Buffer.concat(chunks).toString('utf-8');
+
+        const url = new URL(req.url || '/', `http://${req.headers.host}`);
+        const isTestPlan = url.pathname.endsWith('/testplan');
+
+        let gherkinContent: string;
+
+        if (isTestPlan) {
+          // Parse TestPlan JSON, find the feature file reference
+          try {
+            const testPlan = JSON.parse(body);
+            const suite = testPlan.suite?.[0];
+            const featureFile = suite?.input?.find((i: any) => i.name === 'gherkin-script')?.file;
+            if (!featureFile) {
+              res.statusCode = 400;
+              res.end(JSON.stringify({ error: 'TestPlan has no gherkin-script input' }));
+              return;
+            }
+            // Try to load the feature file from public/
+            const fs = await import('fs');
+            const path = await import('path');
+            const featurePath = path.join(process.cwd(), 'public', featureFile);
+            if (!fs.existsSync(featurePath)) {
+              res.statusCode = 404;
+              res.end(JSON.stringify({ error: `Feature file not found: ${featureFile}` }));
+              return;
+            }
+            gherkinContent = fs.readFileSync(featurePath, 'utf-8');
+          } catch (e: any) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error: `Invalid TestPlan JSON: ${e.message}` }));
+            return;
+          }
+        } else {
+          gherkinContent = body;
+        }
+
+        if (!gherkinContent.trim()) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: 'Empty Gherkin content' }));
+          return;
+        }
+
+        try {
+          // Use the Vite module runner to load the parser modules
+          const mod = await server.ssrLoadModule('/src/api/compile.ts');
+          const result = await mod.compileGherkin(gherkinContent);
+
+          if (result.error) {
+            res.statusCode = 422;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: result.error, issues: result.issues }));
+            return;
+          }
+
+          // Build ZIP
+          const JSZip = (await import('jszip')).default;
+          const zip = new JSZip();
+          for (const file of result.files) {
+            zip.file(file.filename, file.xml);
+          }
+          const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/zip');
+          res.setHeader('Content-Disposition', `attachment; filename="${result.testcaseName || 'testsuite'}.zip"`);
+          res.end(zipBuffer);
+        } catch (e: any) {
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: `Compilation failed: ${e.message}` }));
+        }
+      });
+    },
+  };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const db = getDbConfig(env);
   return {
-  plugins: [react(), healthProxy(), itbProxy(), itbIdResolver(db)],
+  plugins: [react(), healthProxy(), itbProxy(), compileApi(), itbIdResolver(db)],
   // Use environment variable for base path, fallback to /test-workbench/ for GitHub Pages
   base: process.env.VITE_BASE_PATH || '/test-workbench/',
   optimizeDeps: {

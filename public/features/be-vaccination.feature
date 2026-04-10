@@ -14,8 +14,9 @@ Feature: Belgian Vaccination (BeVaccination) profile validation
     # ==================================================================
     # Step 1: Upload — User provides a BeVaccination (Immunization) JSON
     # ==================================================================
-    Given ask user for "immunizationResource" with prompt "Upload a BeVaccination Immunization JSON"
-    Then the "immunizationResource" resource type should be "Immunization"
+    Given User is asked for "immunizationResource" with "Upload a BeVaccination Immunization JSON"
+    Then extract "/resourceType" from "immunizationResource" as "resourceType"
+    And "resourceType" should be "Immunization"
 
     # ==================================================================
     # Step 2: Rule 1 — Recorder/Performer identifier matching
@@ -53,4 +54,4 @@ Feature: Belgian Vaccination (BeVaccination) profile validation
     # ==================================================================
     # Result
     # ==================================================================
-    And inform the user "BeVaccination validated: recorder/performer match and CNK/SNOMED consistency checks passed."
+    And User is informed "BeVaccination validated: recorder/performer match and CNK/SNOMED consistency checks passed."

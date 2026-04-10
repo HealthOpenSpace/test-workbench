@@ -50,13 +50,7 @@ export const TestAuthoringPage: React.FC<Props> = ({ engine }) => {
     });
   }, []);
 
-  // Load default example
-  useEffect(() => {
-    if (!gherkinContent && loadedExamples.length > 0) {
-      const def = loadedExamples.find(ex => ex.dataModel === selectedModel.id);
-      if (def) setGherkinContent(def.content);
-    }
-  }, [selectedModel.id, gherkinContent, loadedExamples, setGherkinContent]);
+  // No auto-load — editor starts empty. User picks from Examples tab.
 
   const handleExampleSelect = (example: ExampleScenario) => {
     setGherkinContent(example.content);

@@ -194,9 +194,9 @@ function collectVariables(ir: IRAction[]): DeclaredVariable[] {
     }
   }
 
-  // 3. Variables created by <send id="xxx"> — the id becomes a referenceable variable
+  // 3. Variables created by <send id="xxx"> or <receive id="xxx">
   for (const a of ir) {
-    if (a.type === 'send' && a.id && !seen.has(a.id)) {
+    if ((a.type === 'send' || a.type === 'receive') && a.id && !seen.has(a.id)) {
       seen.add(a.id);
       vars.push({ name: a.id, varType: 'map' });
     }
@@ -364,6 +364,14 @@ function emitIR(ir: IRAction[]): string {
         out.push(`  <request desc="${escapeAttr(req.desc)}"${nameAttr}${typeAttr}${reqAttr}>${escapeXml(req.variable)}</request>`);
       }
       out.push(`</interact>`);
+    } else if (a.type === 'receive') {
+      const idAttr = a.id ? ` id="${escapeAttr(a.id)}"` : '';
+      const descAttr = a.desc ? ` desc="${escapeAttr(a.desc)}"` : '';
+      const fromAttr = a.from ? ` from="${escapeAttr(a.from)}"` : '';
+      const toAttr = a.to ? ` to="${escapeAttr(a.to)}"` : '';
+      out.push(`<receive${idAttr}${descAttr} handler="${escapeAttr(a.handler)}"${fromAttr}${toAttr}>`);
+      out.push(...emitInputs(a.inputs));
+      out.push(`</receive>`);
     }
   }
   return out.join('\n');

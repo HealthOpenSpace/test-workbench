@@ -49,7 +49,8 @@ export type IRAction =
   | { type: 'foreach', from: string, do: IRAction[] }
   | { type: 'declareActor', id: string, name?: string, role?: string, endpoint?: string, canonical?: string }
   | { type: 'declareVariable', name: string, varType: string, value?: string }
-  | { type: 'interact', id?: string, desc?: string, inputTitle?: string, requests: { desc: string, name?: string, inputType?: string, required?: boolean, variable: string }[] };
+  | { type: 'interact', id?: string, desc?: string, inputTitle?: string, requests: { desc: string, name?: string, inputType?: string, required?: boolean, variable: string }[] }
+  | { type: 'receive', id?: string, desc?: string, handler: string, from?: string, to?: string, inputs?: Record<string,string> };
 
 
 type ServicesMap = Record<string, string>; // { "FHIR-validator": "1.2.0", "Monitor": "2.1.0" }
@@ -482,6 +483,10 @@ function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
       result = result.slice(1, -1);
     }
 
+    // Resolve reserved keywords to internal variable references.
+    // e.g. $$1 where $1 captured "response status" → $lastRequest{response}{status}
+    result = resolveReservedNames(result);
+
     return result;
   };
 
@@ -554,6 +559,11 @@ function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
       out.push({ type: 'interact', id: subst(clone.interact.id ?? ''), desc: subst(clone.interact.desc ?? ''), inputTitle: subst(clone.interact.inputTitle ?? ''), requests });
       return;
     }
+    if (clone.receive) {
+      if (clone.receive.inputs) for (const k in clone.receive.inputs) clone.receive.inputs[k] = subst(clone.receive.inputs[k]);
+      out.push({ type: 'receive', id: subst(clone.receive.id ?? ''), desc: subst(clone.receive.desc ?? ''), handler: clone.receive.handler, from: subst(clone.receive.from ?? ''), to: subst(clone.receive.to ?? ''), inputs: clone.receive.inputs });
+      return;
+    }
   };
 
   actions.forEach(visit);
@@ -565,6 +575,29 @@ function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
 }
 
 /** Semver helpers (very small, supports >=, >, =, <=, < with x.y[.z]) */
+/** Reserved keywords that resolve to internal TDL variable paths */
+const RESERVED_NAMES: Record<string, string> = {
+  'response status': '$lastRequest{response}{status}',
+  'response body': '$lastRequest{response}{body}',
+  'response': '$lastRequest{response}{body}',
+  'validation errors': '$validationErrors',
+  'validation warnings': '$validationWarnings',
+  'validation outcome': '$validationOutcome',
+  'validation severity': '$validationSeverity',
+};
+
+/** Replace reserved name references with their TDL variable paths.
+ *  Handles both bare `$reservedName` (from $$1 substitution) and
+ *  quoted `"reservedName"` contexts. */
+function resolveReservedNames(s: string): string {
+  for (const [name, path] of Object.entries(RESERVED_NAMES)) {
+    // $$1 substitution produces $<captured-text> — if that text is a reserved name
+    // e.g. $$1 with $1="response status" → $response status → replace with path
+    s = s.replace(new RegExp(`\\$${name.replace(/\s/g, '\\s')}(?![a-zA-Z0-9_])`, 'g'), path);
+  }
+  return s;
+}
+
 /** Normalize multiple spaces to single, but preserve whitespace inside quotes */
 function normalizeSpaces(s: string): string {
   const parts: string[] = [];

@@ -19,7 +19,20 @@ export interface GherkinEngine {
 
 export function useGherkinEngine(): GherkinEngine {
   const { parser, generator } = useAppContext();
-  const [gherkinContent, setGherkinContent] = useState<string>('');
+  const [gherkinContent, setGherkinContentState] = useState<string>('');
+
+  // Listen for content imported from itb-test-manager via postMessage
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type === 'workbench-import' && e.data.gherkin) {
+        setGherkinContentState(e.data.gherkin);
+      }
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
+  const setGherkinContent = setGherkinContentState;
   const [parsedScenario, setParsedScenario] = useState<ParsedScenario | null>(null);
   const [issues, setIssues] = useState<any[]>([]);
 

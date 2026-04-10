@@ -37,13 +37,13 @@ const DOC_GROUPS: Record<string, { docPattern: string; matchers: RegExp[] }> = {
     docPattern: '<Actor> is available [as "<name>"] [at <endpoint>] [as defined by <canonical>]',
     matchers: [/is available/],
   },
-  'inform': {
-    docPattern: 'inform <user|monitor> "<message>"',
-    matchers: [/^inform/],
+  'interaction-inform': {
+    docPattern: '<Actor> is informed "<message>" [with "<content>"]',
+    matchers: [/is informed "/],
   },
-  'monitor-review': {
-    docPattern: 'monitor is asked to review ["<content>"] with "<message>"',
-    matchers: [/monitor is asked to review/],
+  'interaction-ask': {
+    docPattern: '<Actor> is asked for "<variable>" [with "<message>"]',
+    matchers: [/is asked for "/],
   },
   'validate-resource': {
     docPattern: 'validate "<resource>" against "<profiles>" [with best practice "<level>"] [with resource id "<rule>"]',
@@ -57,20 +57,28 @@ const DOC_GROUPS: Record<string, { docPattern: string; matchers: RegExp[] }> = {
     docPattern: 'evaluate FHIRPath "<expression>" [on "<resource>"] [and expect "<value>" | as "<variable>" | exists | count is <n>]',
     matchers: [/evaluate FHIRPath/],
   },
-  'response-status': {
-    docPattern: 'the response status should be "<code>" [or "<code>"...] | be in ["<code>", ...]',
-    matchers: [/^the response status should be/],
+  'wait-receive': {
+    docPattern: '<Actor> waits for <Actor> [within <number> seconds]',
+    matchers: [/waits for/],
   },
-  'variable-assertion': {
-    docPattern: '"<variable>" should be "<value>" | should contain "<substring>" | should not be empty',
-    matchers: [/should be "/, /should contain "/, /should not be empty/],
+  'conditional': {
+    docPattern: 'if "<variable>" is [not empty | "<value>"] then "<variable>" should [be|contain] "<value>"',
+    matchers: [/^if "/],
+  },
+  'assertion': {
+    docPattern: '"<variable>" should [not] be "<value>" | should contain "<value>" | should not be empty',
+    matchers: [/^"[^"]+" should/, /should not be empty/],
+  },
+  'http-methods': {
+    docPattern: '<Actor> posts|puts to <Actor> at "<path>" with: | <Actor> deletes on <Actor> at "<path>" | <Actor> gets "<url>" as "<variable>"',
+    matchers: [/posts to/, /puts to/, /deletes on/, /gets "/],
   },
   'set-variable': {
     docPattern: 'set "<variable>" to "<value>" | to: (docstring)',
-    matchers: [/^set "/, /^define resource "/],
+    matchers: [/^set "/],
   },
   'extract': {
-    docPattern: 'extract "<jsonPointer>" [from "<variable>"] as "<variable>"',
+    docPattern: 'extract "<pointer>" [from "<variable>"] as "<variable>"',
     matchers: [/^extract "/],
   },
   'matchetype': {
@@ -85,10 +93,6 @@ const DOC_GROUPS: Record<string, { docPattern: string; matchers: RegExp[] }> = {
     docPattern: 'ask <user|monitor> for "<variable>" [with prompt "<description>"]',
     matchers: [/^ask (user|monitor) for "/],
   },
-  'logging': {
-    docPattern: 'log "<message>" | log variable "<variable>"',
-    matchers: [/^log /],
-  },
 };
 
 /** Infer a category from the step pattern and actions */
@@ -102,17 +106,21 @@ function inferCategory(step: CatalogStep): string {
   if (m.includes('loaded with package')) return 'Actors';
 
   // 2. HTTP
-  if (m.includes('calls') || m.includes('sends') || m.includes('fetch')) return 'HTTP';
+  if (m.includes('posts to') || m.includes('puts to') || m.includes('deletes on') || m.includes('gets "') || m.includes('set header')) return 'HTTP Requests';
 
   // 3. Variables & Data
   if (m.includes('set "') || m.includes('define resource') || m.includes('define ')) return 'Variables & Data';
   if (m.includes('extract') && !m.includes('FHIRPath')) return 'Variables & Data';
   if (actionTypes.includes('interact') || m.includes('ask ')) return 'Variables & Data';
 
-  // 4. Assertions
+  // 4. Wait / Receive
+  if (m.includes('waits for')) return 'Wait / Receive';
+
+  // 5. Conditionals
+  if (m.startsWith('^if "')) return 'Conditionals';
+
+  // 5. Assertions
   if (m.includes('should be') || m.includes('should contain') || m.includes('should not be')) return 'Assertions';
-  if (m.includes('response status')) return 'Assertions';
-  if (m.includes('validation has')) return 'Assertions';
 
   // 5. Interaction
   if (m.includes('inform') || m.includes('monitor')) return 'Interaction';
@@ -207,7 +215,7 @@ export function useCatalogData() {
         // Sort categories: core first, then by name
         const cats = [...new Set(entries.map(e => e.category))];
         const coreOrder = [
-          'Actors', 'HTTP', 'Variables & Data', 'Assertions', 'Interaction', 'Logging',
+          'Actors', 'HTTP Requests', 'Variables & Data', 'Wait / Receive', 'Conditionals', 'Assertions', 'Interaction', 'Logging',
           'Validation', 'FHIRPath & Extraction', 'Matchetype', 'Test Data', 'General',
         ];
         cats.sort((a, b) => {

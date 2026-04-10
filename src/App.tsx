@@ -20,7 +20,13 @@ function AppShell() {
   const engine = useGherkinEngine();
 
   // Track which panels are expanded — at least one must be
-  const [expanded, setExpanded] = useState<Set<PanelId>>(new Set(['language']));
+  const [expanded, setExpanded] = useState<Set<PanelId>>(() => {
+    // If importing from external, start with authoring panel
+    if (window.location.hash.includes('import')) {
+      return new Set<PanelId>(['authoring']);
+    }
+    return new Set<PanelId>(['language']);
+  });
 
   const togglePanel = (id: PanelId) => {
     const next = new Set(expanded);

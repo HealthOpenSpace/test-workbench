@@ -68,11 +68,11 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({ value, onChange, 
     // Register Gherkin language
     monaco.languages.register({ id: 'gherkin' });
 
-    // Monarch tokenizer for Gherkin syntax highlighting
+    // Monarch tokenizer for FHIR Gherkin Dialect
     monaco.languages.setMonarchTokensProvider('gherkin', {
       tokenizer: {
         root: [
-          // Comments (must be early to take priority)
+          // Comments
           [/^\s*#.*$/, 'comment'],
 
           // Structural keywords
@@ -84,53 +84,63 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({ value, onChange, 
           // Tags
           [/^\s*@\S+/, 'tag'],
 
-          // Doc strings (triple quotes)
+          // Doc strings
           [/^\s*"""/, { token: 'string.docstring', next: '@docstring' }],
 
           // Table rows
           [/^\s*\|/, { token: 'delimiter.table', next: '@table' }],
 
-          // Step keywords — match keyword then switch to step content state
+          // Step keywords
           [/^\s*(Given|When|Then|And|But)\b/, { token: 'keyword.step', next: '@stepContent' }],
 
-          // Strings in double quotes
+          // Strings
           [/"[^"]*"/, 'string'],
-
-          // Numbers
           [/\b[0-9]+\b/, 'number'],
         ],
 
-        // Inside a step line — highlight actors, strings, URLs, types
         stepContent: [
-          // End of line → back to root
           [/$/, '', '@pop'],
 
-          // Strings in double quotes
+          // Quoted strings — check for reserved names
+          [/"(response status|response body|response|validation errors|validation warnings|validation outcome|validation severity)"/, 'variable.reserved'],
+
+          // Regular quoted strings
           [/"[^"]*"/, 'string'],
 
-          // URLs (before general word matching)
+          // URLs
           [/https?:\/\/[^\s"]+/, 'url'],
 
-          // FHIR resource types
-          [/\b(Patient|Observation|Practitioner|Organization|Encounter|AllergyIntolerance|Bundle|OperationOutcome|Condition|Medication|Immunization|Questionnaire)\b/, 'type'],
+          // Dialect verbs (bold keywords within steps)
+          [/\b(is the system under test|is available|is loaded with package|is informed|is asked for)\b/, 'keyword.verb'],
+          [/\b(posts to|puts to|deletes on|patches on|gets)\b/, 'keyword.verb'],
+          [/\b(should be|should not be|should contain|should not be empty|should NOT match)\b/, 'keyword.verb'],
+          [/\b(set|extract|from|as|at|with|to)\b/, 'keyword.minor'],
+          [/\b(validate|evaluate FHIRPath|on|and expect|exists|count is)\b/, 'keyword.verb'],
+          [/\b(partially match|exactly match|against)\b/, 'keyword.verb'],
+          [/\b(generate test data from profile|define mappings|define data|with parts)\b/, 'keyword.verb'],
+          [/\b(the validation should pass|the validation should fail)\b/, 'keyword.verb'],
+          [/\b(if|then|is not empty|is empty)\b/, 'keyword.verb'],
+          [/\b(set header|log|inform)\b/, 'keyword.verb'],
+          [/\b(as defined by)\b/, 'keyword.minor'],
 
-          // Actor names: capitalized identifier followed by a verb
-          [/[A-Z][A-Za-z0-9_]*(?=\s+(?:is|creates|submits|registers|validates))/, 'variable.actor'],
+          // Actor names: capitalized words at start of step or before verbs
+          [/[A-Z][A-Za-z0-9_]*(?=\s+(?:is |posts |puts |deletes |patches |gets |calls ))/, 'variable.actor'],
+          [/(?<=to\s+)[A-Z][A-Za-z0-9_]*(?=\s+at\b)/, 'variable.actor'],
+
+          // Variable references: $varName
+          [/\$[A-Za-z_][A-Za-z0-9_]*/, 'variable.ref'],
 
           // Numbers
           [/\b[0-9]+\b/, 'number'],
 
-          // Everything else in the step line
           [/./, ''],
         ],
 
-        // Doc string block
         docstring: [
           [/^\s*"""/, { token: 'string.docstring', next: '@pop' }],
           [/.*/, 'string.docstring'],
         ],
 
-        // Table row
         table: [
           [/[^|\r\n]+/, 'string.table'],
           [/\|/, 'delimiter.table'],
@@ -148,15 +158,18 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({ value, onChange, 
         { token: 'keyword.background', foreground: '569cd6', fontStyle: 'bold' },
         { token: 'keyword.scenario', foreground: '4ec9b0', fontStyle: 'bold' },
         { token: 'keyword.step', foreground: 'c586c0' },
+        { token: 'keyword.verb', foreground: '569cd6' },
+        { token: 'keyword.minor', foreground: '808080' },
         { token: 'tag', foreground: '608b4e' },
         { token: 'string', foreground: 'ce9178' },
         { token: 'string.docstring', foreground: 'ce9178', fontStyle: 'italic' },
         { token: 'string.table', foreground: 'dcdcaa' },
         { token: 'delimiter.table', foreground: '808080' },
         { token: 'url', foreground: '4fc1ff', fontStyle: 'underline' },
-        { token: 'type', foreground: '4ec9b0' },
         { token: 'number', foreground: 'b5cea8' },
         { token: 'variable.actor', foreground: '9cdcfe', fontStyle: 'bold' },
+        { token: 'variable.reserved', foreground: 'dcdcaa', fontStyle: 'italic' },
+        { token: 'variable.ref', foreground: '9cdcfe' },
         { token: 'comment', foreground: '6a9955' },
       ],
       colors: {
@@ -183,15 +196,18 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(({ value, onChange, 
         { token: 'keyword.background', foreground: '0000ff', fontStyle: 'bold' },
         { token: 'keyword.scenario', foreground: '0451a5', fontStyle: 'bold' },
         { token: 'keyword.step', foreground: 'af00db' },
+        { token: 'keyword.verb', foreground: '0000ff' },
+        { token: 'keyword.minor', foreground: '808080' },
         { token: 'tag', foreground: '008000' },
         { token: 'string', foreground: 'a31515' },
         { token: 'string.docstring', foreground: 'a31515', fontStyle: 'italic' },
         { token: 'string.table', foreground: '795e26' },
         { token: 'delimiter.table', foreground: '808080' },
         { token: 'url', foreground: '0000ff', fontStyle: 'underline' },
-        { token: 'type', foreground: '0451a5' },
         { token: 'number', foreground: '098658' },
         { token: 'variable.actor', foreground: '001080', fontStyle: 'bold' },
+        { token: 'variable.reserved', foreground: '795e26', fontStyle: 'italic' },
+        { token: 'variable.ref', foreground: '001080' },
         { token: 'comment', foreground: '008000' },
       ],
       colors: {
