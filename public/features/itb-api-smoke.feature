@@ -14,10 +14,10 @@ Feature: FHIR Validator ITB REST API smoke test
   Scenario: itb-smoke-001 Generate, validate, load IG, validate against IG, FHIRPath extract and assert
 
     # ------------------------------------------------------------------
-    # Step 1: Generate a Patient (and an AllergyIntolerance) from the base FHIR spec
+    # Step 1: Generate a Patient (and an AllergyIntolerance) with required elements only
     # ------------------------------------------------------------------
-    Given generate test data from profile "http://hl7.org/fhir/StructureDefinition/Patient" as "patient"
-    Given generate test data from profile "http://hl7.org/fhir/StructureDefinition/AllergyIntolerance" as "allergy"
+    Given generate required test data from profile "http://hl7.org/fhir/StructureDefinition/Patient" as "patient"
+    Given generate required test data from profile "http://hl7.org/fhir/StructureDefinition/AllergyIntolerance" as "allergy"
 
     # ------------------------------------------------------------------
     # Step 2: Validate against base FHIR spec

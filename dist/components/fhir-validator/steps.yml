@@ -690,6 +690,7 @@ steps:
   # TEST DATA GENERATION
   # ==================================================================
 
+  # generate test data from profile "<url>"
   - match: '^generate test data from profile "([^"]+)"$'
     actions:
       - assign:
@@ -715,6 +716,7 @@ steps:
             content: '$lastRequest{response}{body}'
             pointer: '"/output/0/value"'
 
+  # generate test data from profile "<url>" as "<var>"
   - match: '^generate test data from profile "([^"]+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
     actions:
       - assign:
@@ -732,6 +734,58 @@ steps:
             method: '"POST"'
             headers: '$fhirValidatorHeaders'
             body: "concat('{\"operation\":\"generate\",\"input\":[{\"name\":\"profile\",\"value\":\"', \"$1\", '\",\"embeddingMethod\":\"STRING\"}]}')"
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: '$2'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/0/value"'
+
+  # generate required test data from profile "<url>"
+  - match: '^generate required test data from profile "([^"]+)"$'
+    actions:
+      - assign:
+          to: 'fhirValidatorHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'fhirValidatorHeaders{Accept}'
+          value: '"application/json"'
+      - send:
+          id: 'lastRequest'
+          desc: 'Generate required-only test data from profile'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: 'concat($FHIRValidatorBase, "/itb/testdata/process")'
+            method: '"POST"'
+            headers: '$fhirValidatorHeaders'
+            body: "concat('{\"operation\":\"generate\",\"input\":[{\"name\":\"profile\",\"value\":\"', \"$1\", '\",\"embeddingMethod\":\"STRING\"},{\"name\":\"requiredOnly\",\"value\":\"true\",\"embeddingMethod\":\"STRING\"}]}')"
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'generatedResource'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/0/value"'
+
+  # generate required test data from profile "<url>" as "<var>"
+  - match: '^generate required test data from profile "([^"]+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - assign:
+          to: 'fhirValidatorHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'fhirValidatorHeaders{Accept}'
+          value: '"application/json"'
+      - send:
+          id: 'lastRequest'
+          desc: 'Generate required-only test data from profile'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: 'concat($FHIRValidatorBase, "/itb/testdata/process")'
+            method: '"POST"'
+            headers: '$fhirValidatorHeaders'
+            body: "concat('{\"operation\":\"generate\",\"input\":[{\"name\":\"profile\",\"value\":\"', \"$1\", '\",\"embeddingMethod\":\"STRING\"},{\"name\":\"requiredOnly\",\"value\":\"true\",\"embeddingMethod\":\"STRING\"}]}')"
       - process:
           handler: 'JsonPointerProcessor'
           operation: 'process'
