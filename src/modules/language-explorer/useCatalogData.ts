@@ -66,7 +66,7 @@ const DOC_GROUPS: Record<string, { docPattern: string; matchers: RegExp[] }> = {
     matchers: [/^if "/],
   },
   'assertion': {
-    docPattern: '"<variable>" should [not] be "<value>" | should contain "<value>" | should not be empty',
+    docPattern: '"<variable>" should [not] be "<value>" | should [not] contain "<value>" | should not be empty',
     matchers: [/^"[^"]+" should/, /should not be empty/],
   },
   'http-methods': {
