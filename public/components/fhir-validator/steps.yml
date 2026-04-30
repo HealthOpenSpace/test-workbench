@@ -740,6 +740,185 @@ steps:
             content: '$lastRequest{response}{body}'
             pointer: '"/output/0/value"'
 
+  # generate required test data from profile "<url>"
+  - match: '^generate required test data from profile "([^"]+)"$'
+    actions:
+      - assign:
+          to: 'fhirValidatorHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'fhirValidatorHeaders{Accept}'
+          value: '"application/json"'
+      - send:
+          id: 'lastRequest'
+          desc: 'Generate required-only test data from profile'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: 'concat($FHIRValidatorBase, "/itb/testdata/process")'
+            method: '"POST"'
+            headers: '$fhirValidatorHeaders'
+            body: "concat('{\"operation\":\"generate\",\"input\":[{\"name\":\"profile\",\"value\":\"', \"$1\", '\",\"embeddingMethod\":\"STRING\"},{\"name\":\"requiredOnly\",\"value\":\"true\",\"embeddingMethod\":\"STRING\"}]}')"
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'generatedResource'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/0/value"'
+
+  # generate required test data as "<var>" from profile "<url>"
+  - match: '^generate required test data as "([A-Za-z_][A-Za-z0-9_]*)" from profile "([^"]+)"$'
+    actions:
+      - assign:
+          to: 'fhirValidatorHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'fhirValidatorHeaders{Accept}'
+          value: '"application/json"'
+      - send:
+          id: 'lastRequest'
+          desc: 'Generate required-only test data from profile'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: 'concat($FHIRValidatorBase, "/itb/testdata/process")'
+            method: '"POST"'
+            headers: '$fhirValidatorHeaders'
+            body: "concat('{\"operation\":\"generate\",\"input\":[{\"name\":\"profile\",\"value\":\"', \"$2\", '\",\"embeddingMethod\":\"STRING\"},{\"name\":\"requiredOnly\",\"value\":\"true\",\"embeddingMethod\":\"STRING\"}]}')"
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: '$1'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/0/value"'
+
+  # generate required test data as "<var>" from profile "<url>" with values:
+  #   | path | value | system | code |
+  #   | Patient.id                               | smoke-test-id  |                          |         |
+  #   | AllergyIntolerance.code.coding           |                | http://snomed.info/sct   | 1232123 |
+  #   | AllergyIntolerance.clinicalStatus.coding |                | http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical | active |
+  # Per row: if "value" is non-empty -> primitive mapping; else -> Coding mapping with system+code.
+  - match: '^generate required test data as "([A-Za-z_][A-Za-z0-9_]*)" from profile "([^"]+)" with values:$'
+    table:
+      required: [path]
+    actions:
+      - assign:
+          to: 'fhirValidatorHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'fhirValidatorHeaders{Accept}'
+          value: '"application/json"'
+      - assign:
+          to: 'mappingsJson'
+          value: '"["'
+      - foreach:
+          from: '$tableRows'
+          do:
+            - assign:
+                to: 'entryTplParams{path}'
+                value: '"$row.path"'
+            - assign:
+                to: 'entryTplParams{value}'
+                value: '"$row.value"'
+            - assign:
+                to: 'entryTplParams{system}'
+                value: '"$row.system"'
+            - assign:
+                to: 'entryTplParams{code}'
+                value: '"$row.code"'
+            - assign:
+                to: 'entryTplParams{accum}'
+                value: '$mappingsJson'
+            - process:
+                handler: 'TemplateProcessor'
+                operation: 'process'
+                output: 'mappingsJson'
+                inputs:
+                  syntax: '"freemarker"'
+                  template: "'${accum}<#if accum?ends_with(\"[\")><#else>,</#if>{\"path\":\"${path}\",<#if value?has_content>\"value\":\"${value}\"<#else>\"parts\":[{\"name\":\"system\",\"value\":\"${system}\"},{\"name\":\"code\",\"value\":\"${code}\"}]</#if>}'"
+                  parameters: '$entryTplParams'
+      - assign:
+          to: 'closeTplParams{accum}'
+          value: '$mappingsJson'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'mappingsJson'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'${accum}]'"
+            parameters: '$closeTplParams'
+      - assign:
+          to: 'generateTplParams{profile}'
+          value: '"$2"'
+      - assign:
+          to: 'generateTplParams{mappings}'
+          value: '$mappingsJson'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'generateBody'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'{ \"operation\": \"generate\", \"input\": [ { \"name\": \"profile\", \"value\": \"${profile}\", \"embeddingMethod\": \"STRING\" }, { \"name\": \"requiredOnly\", \"value\": \"true\", \"embeddingMethod\": \"STRING\" }, { \"name\": \"mappings\", \"value\": \"${mappings?json_string}\", \"embeddingMethod\": \"STRING\" } ] }'"
+            parameters: '$generateTplParams'
+      - send:
+          id: 'lastRequest'
+          desc: 'Generate required-only test data with values'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: 'concat($FHIRValidatorBase, "/itb/testdata/process")'
+            method: '"POST"'
+            headers: '$fhirValidatorHeaders'
+            body: '$generateBody'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: '$1'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/0/value"'
+
+  # generate required test data from profile "<url>" with mappings "<mappingsVar>" as "<var>"
+  - match: '^generate required test data from profile "([^"]+)" with mappings "([A-Za-z_][A-Za-z0-9_]*)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - assign:
+          to: 'fhirValidatorHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'fhirValidatorHeaders{Accept}'
+          value: '"application/json"'
+      - assign:
+          to: 'generateTplParams{profile}'
+          value: '"$1"'
+      - assign:
+          to: 'generateTplParams{mappings}'
+          value: '$$2'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'generateBody'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'{ \"operation\": \"generate\", \"input\": [ { \"name\": \"profile\", \"value\": \"${profile}\", \"embeddingMethod\": \"STRING\" }, { \"name\": \"requiredOnly\", \"value\": \"true\", \"embeddingMethod\": \"STRING\" }, { \"name\": \"mappings\", \"value\": \"${mappings?json_string}\", \"embeddingMethod\": \"STRING\" } ] }'"
+            parameters: '$generateTplParams'
+      - send:
+          id: 'lastRequest'
+          desc: 'Generate required-only test data from profile with mappings'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: 'concat($FHIRValidatorBase, "/itb/testdata/process")'
+            method: '"POST"'
+            headers: '$fhirValidatorHeaders'
+            body: '$generateBody'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: '$3'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/0/value"'
+
   - match: '^define mappings "([A-Za-z_][A-Za-z0-9_]*)":$'
     table:
       required: [path, expression]

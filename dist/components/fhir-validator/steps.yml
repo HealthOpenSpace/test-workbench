@@ -794,6 +794,46 @@ steps:
             content: '$lastRequest{response}{body}'
             pointer: '"/output/0/value"'
 
+  # generate required test data from profile "<url>" with mappings "<mappingsVar>" as "<var>"
+  - match: '^generate required test data from profile "([^"]+)" with mappings "([A-Za-z_][A-Za-z0-9_]*)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - assign:
+          to: 'fhirValidatorHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'fhirValidatorHeaders{Accept}'
+          value: '"application/json"'
+      - assign:
+          to: 'generateTplParams{profile}'
+          value: '"$1"'
+      - assign:
+          to: 'generateTplParams{mappings}'
+          value: '$$2'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'generateBody'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'{ \"operation\": \"generate\", \"input\": [ { \"name\": \"profile\", \"value\": \"${profile}\", \"embeddingMethod\": \"STRING\" }, { \"name\": \"requiredOnly\", \"value\": \"true\", \"embeddingMethod\": \"STRING\" }, { \"name\": \"mappings\", \"value\": \"${mappings?json_string}\", \"embeddingMethod\": \"STRING\" } ] }'"
+            parameters: '$generateTplParams'
+      - send:
+          id: 'lastRequest'
+          desc: 'Generate required-only test data from profile with mappings'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: 'concat($FHIRValidatorBase, "/itb/testdata/process")'
+            method: '"POST"'
+            headers: '$fhirValidatorHeaders'
+            body: '$generateBody'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: '$3'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/0/value"'
+
   - match: '^define mappings "([A-Za-z_][A-Za-z0-9_]*)":$'
     table:
       required: [path, expression]
