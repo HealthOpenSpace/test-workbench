@@ -1,10 +1,12 @@
 Feature: FHIR Validator ITB REST API smoke test
-  Exercises the GITB-aligned endpoints under /itb/* end to end:
+  Exercises all GITB-aligned endpoints under /itb/* end to end:
     - igManager: load an IG
     - testdata: generate resources (required elements only)
     - fhir: validate against base spec and against an IG profile
-    - fhirpath: evaluate (extract a value)
-    - fhirpath: assert (expression must be true)
+    - matchetype: pattern-match a resource against an expected shape
+    - fhirPath: evaluate (extract a value)
+    - fhirPathAssertion: assert a boolean expression on a resource
+    - validationResults: summarize an OperationOutcome
 
   Background:
     Given Client is the system under test
@@ -44,3 +46,21 @@ Feature: FHIR Validator ITB REST API smoke test
     # Step 5: Assert a FHIRPath expression (evaluate-and-expect)
     # ------------------------------------------------------------------
     And evaluate FHIRPath "Patient.id.exists()" on "patient" and expect "true"
+
+    # ------------------------------------------------------------------
+    # Step 6: Pattern-match the patient against an expected shape (matchetype)
+    # ------------------------------------------------------------------
+    And "patient" matches pattern:
+      """
+      {"resourceType": "Patient", "id": "$string$"}
+      """
+
+    # ------------------------------------------------------------------
+    # Step 7: Boolean assertion via FHIRPathAssertion (TAR pass/fail)
+    # ------------------------------------------------------------------
+    And assert FHIRPath "Patient.id.exists()" on "patient"
+
+    # ------------------------------------------------------------------
+    # Step 8: Summarize the validation outcome (validationResults)
+    # ------------------------------------------------------------------
+    And summarize "validationOutcome" as "errCount" "warnCount" "infoCount"

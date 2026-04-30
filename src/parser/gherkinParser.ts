@@ -525,7 +525,7 @@ function materialize(actions: CatalogAction[], ctx: any): IRAction[] {
     }
     if (clone.verify) {
       for (const k in clone.verify.inputs) clone.verify.inputs[k] = subst(clone.verify.inputs[k]);
-      out.push({ type: 'verify', handler: clone.verify.handler, desc: clone.verify.desc, inputs: clone.verify.inputs });
+      out.push({ type: 'verify', handler: clone.verify.handler, desc: subst(clone.verify.desc ?? ''), inputs: clone.verify.inputs });
       return;
     }
     if (clone.process) {
