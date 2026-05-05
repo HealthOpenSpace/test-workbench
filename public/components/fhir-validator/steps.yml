@@ -1028,4 +1028,237 @@ steps:
                 list: '$1'
                 item: '$row'
 
+  # ----------------------------------------------------------------------
+  # modify "<var>" with operations:
+  #   | op     | path                                  | value      | system | code |
+  #   | set    | AllergyIntolerance.recordedDate       | 2026-04-01 |        |      |
+  #   | set    | AllergyIntolerance.code.coding        |            | http://snomed.info/sct | 1232123 |
+  #   | add    | AllergyIntolerance.note               | text-only  |        |      |
+  #   | remove | AllergyIntolerance.clinicalStatus     |            |        |      |
+  #
+  # Modifies the resource stored in $<var> in place by sending it to
+  # POST /itb/testdata/process with operation=modify. enforce=false (no
+  # post-validation). Per row: if value is non-empty -> primitive write; else
+  # if op != remove -> Coding parts {system, code}. For op=remove, only path
+  # is used.
+  # ----------------------------------------------------------------------
+  - match: '^modify "([A-Za-z_][A-Za-z0-9_]*)" with operations:$'
+    table:
+      required: [op, path]
+    actions:
+      - assign:
+          to: 'fhirValidatorHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'fhirValidatorHeaders{Accept}'
+          value: '"application/json"'
+      - assign:
+          to: 'opsJson'
+          value: '"["'
+      - foreach:
+          from: '$tableRows'
+          do:
+            - assign:
+                to: 'opTplParams{op}'
+                value: '"$row.op"'
+            - assign:
+                to: 'opTplParams{path}'
+                value: '"$row.path"'
+            - assign:
+                to: 'opTplParams{value}'
+                value: '"$row.value"'
+            - assign:
+                to: 'opTplParams{system}'
+                value: '"$row.system"'
+            - assign:
+                to: 'opTplParams{code}'
+                value: '"$row.code"'
+            - assign:
+                to: 'opTplParams{accum}'
+                value: '$opsJson'
+            - process:
+                handler: 'TemplateProcessor'
+                operation: 'process'
+                output: 'opsJson'
+                inputs:
+                  syntax: '"freemarker"'
+                  template: "'${accum}<#if accum?ends_with(\"[\")><#else>,</#if>{\"op\":\"${op}\",\"path\":\"${path}\"<#if op != \"remove\"><#if value?has_content>,\"value\":\"${value}\"<#else>,\"parts\":[{\"name\":\"system\",\"value\":\"${system}\"},{\"name\":\"code\",\"value\":\"${code}\"}]</#if></#if>}'"
+                  parameters: '$opTplParams'
+      - assign:
+          to: 'closeOpsTplParams{accum}'
+          value: '$opsJson'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'opsJson'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'${accum}]'"
+            parameters: '$closeOpsTplParams'
+      - assign:
+          to: 'modifyTplParams{resource}'
+          value: '$$1'
+      - assign:
+          to: 'modifyTplParams{operations}'
+          value: '$opsJson'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'modifyBody'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'{ \"operation\": \"modify\", \"input\": [ { \"name\": \"resource\", \"value\": \"${resource?json_string}\", \"embeddingMethod\": \"STRING\" }, { \"name\": \"operations\", \"value\": \"${operations?json_string}\", \"embeddingMethod\": \"STRING\" }, { \"name\": \"enforce\", \"value\": \"false\", \"embeddingMethod\": \"STRING\" } ] }'"
+            parameters: '$modifyTplParams'
+      - send:
+          id: 'lastRequest'
+          desc: 'Modify resource (no enforcement)'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: 'concat($FHIRValidatorBase, "/itb/testdata/process")'
+            method: '"POST"'
+            headers: '$fhirValidatorHeaders'
+            body: '$modifyBody'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: '$1'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/0/value"'
+
+  # ----------------------------------------------------------------------
+  # modify "<var>" against profile "<url>" with operations:
+  #
+  # Same as above but with enforce=true: the validator post-validates the
+  # modified resource against the named profile and returns an OperationOutcome.
+  # The outcome is summarised; if any errors are reported, the step FAILS.
+  # The modified resource is written back to $<var> regardless.
+  # ----------------------------------------------------------------------
+  - match: '^modify "([A-Za-z_][A-Za-z0-9_]*)" against profile "([^"]+)" with operations:$'
+    table:
+      required: [op, path]
+    actions:
+      - assign:
+          to: 'fhirValidatorHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'fhirValidatorHeaders{Accept}'
+          value: '"application/json"'
+      - assign:
+          to: 'opsJson'
+          value: '"["'
+      - foreach:
+          from: '$tableRows'
+          do:
+            - assign:
+                to: 'opTplParams{op}'
+                value: '"$row.op"'
+            - assign:
+                to: 'opTplParams{path}'
+                value: '"$row.path"'
+            - assign:
+                to: 'opTplParams{value}'
+                value: '"$row.value"'
+            - assign:
+                to: 'opTplParams{system}'
+                value: '"$row.system"'
+            - assign:
+                to: 'opTplParams{code}'
+                value: '"$row.code"'
+            - assign:
+                to: 'opTplParams{accum}'
+                value: '$opsJson'
+            - process:
+                handler: 'TemplateProcessor'
+                operation: 'process'
+                output: 'opsJson'
+                inputs:
+                  syntax: '"freemarker"'
+                  template: "'${accum}<#if accum?ends_with(\"[\")><#else>,</#if>{\"op\":\"${op}\",\"path\":\"${path}\"<#if op != \"remove\"><#if value?has_content>,\"value\":\"${value}\"<#else>,\"parts\":[{\"name\":\"system\",\"value\":\"${system}\"},{\"name\":\"code\",\"value\":\"${code}\"}]</#if></#if>}'"
+                  parameters: '$opTplParams'
+      - assign:
+          to: 'closeOpsTplParams{accum}'
+          value: '$opsJson'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'opsJson'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'${accum}]'"
+            parameters: '$closeOpsTplParams'
+      - assign:
+          to: 'modifyTplParams{resource}'
+          value: '$$1'
+      - assign:
+          to: 'modifyTplParams{operations}'
+          value: '$opsJson'
+      - assign:
+          to: 'modifyTplParams{profile}'
+          value: '"$2"'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'modifyBody'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'{ \"operation\": \"modify\", \"input\": [ { \"name\": \"resource\", \"value\": \"${resource?json_string}\", \"embeddingMethod\": \"STRING\" }, { \"name\": \"operations\", \"value\": \"${operations?json_string}\", \"embeddingMethod\": \"STRING\" }, { \"name\": \"profile\", \"value\": \"${profile}\", \"embeddingMethod\": \"STRING\" }, { \"name\": \"enforce\", \"value\": \"true\", \"embeddingMethod\": \"STRING\" } ] }'"
+            parameters: '$modifyTplParams'
+      - send:
+          id: 'lastRequest'
+          desc: 'Modify resource (enforce against profile)'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: 'concat($FHIRValidatorBase, "/itb/testdata/process")'
+            method: '"POST"'
+            headers: '$fhirValidatorHeaders'
+            body: '$modifyBody'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: '$1'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/0/value"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'modificationOutcome'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/1/value"'
+      - assign:
+          to: 'summarizeTplParams{outcome}'
+          value: '$modificationOutcome'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'summarizeBody'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'{ \"operation\": \"summarize\", \"input\": [ { \"name\": \"outcome\", \"value\": \"${outcome?json_string}\", \"embeddingMethod\": \"STRING\" } ] }'"
+            parameters: '$summarizeTplParams'
+      - send:
+          id: 'summarizeRequest'
+          desc: 'Summarise modification OperationOutcome'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: 'concat($FHIRValidatorBase, "/itb/validationResults/process")'
+            method: '"POST"'
+            headers: '$fhirValidatorHeaders'
+            body: '$summarizeBody'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'modificationErrors'
+          inputs:
+            content: '$summarizeRequest{response}{body}'
+            pointer: '"/output/0/value"'
+      - verify:
+          handler: 'StringValidator'
+          desc: 'Modification produced no validation errors'
+          inputs:
+            actualstring: '$modificationErrors'
+            expectedstring: '"0"'
+
   # Extract is provided by core language (en.yml)

@@ -14,8 +14,19 @@ steps:
   # ==================================================================
   # 1. ACTORS
   # ==================================================================
-  # <Actor> is the system under test [at <endpoint>] [as defined by <canonical>]
-  # <Actor> is available [as "<name>"] [at <endpoint>] [as defined by <canonical>]
+  # Roles (matches ITB/GITB vocabulary — SUT is a reserved word):
+  #   SUT     — system under test; the matrix measures conformance for this actor.
+  #             A test plan may declare multiple SUT actors (peer-to-peer testing).
+  #   infra   — required to run the test but not measured (mocks, simulators, proxies).
+  #
+  # Maps to GITB TDL role attribute: SUT → role="SUT", infra → role="SIMULATED".
+  # A 'calibration' role is planned but deferred until ITB can carry the
+  # distinction natively (the GITB XSD rejects unknown attributes).
+  #
+  # Phrases:
+  #   <Actor> is the system under test [at <endpoint>] [as defined by <canonical>]   -> SUT
+  #   <Actor> is available [as "<name>"] [at <endpoint>] [as defined by <canonical>] -> infra (default)
+  #   <Actor> is infrastructure [at <endpoint>] [as defined by <canonical>]          -> infra (explicit)
 
   - match: '^([A-Za-z][A-Za-z0-9_]*) is the system under test (?:on|at) "?(https?://[^"\s]+)"? as defined by "?(https?://[^"\s]+)"?$'
     actions:
@@ -37,25 +48,43 @@ steps:
 
   - match: '^([A-Za-z][A-Za-z0-9_]*) is available (?:on|at) "?(https?://[^"\s]+)"? as defined by "?(https?://[^"\s]+)"?$'
     actions:
-      - declareActor: { id: '$1', endpoint: '$2', canonical: '$3' }
+      - declareActor: { id: '$1', role: 'infra', endpoint: '$2', canonical: '$3' }
       - assign: { to: '$1Base', value: '"$2"' }
 
   - match: '^([A-Za-z][A-Za-z0-9_]*) is available (?:on|at) "?(https?://[^"\s]+)"?$'
     actions:
-      - declareActor: { id: '$1', endpoint: '$2' }
+      - declareActor: { id: '$1', role: 'infra', endpoint: '$2' }
       - assign: { to: '$1Base', value: '"$2"' }
 
   - match: '^([A-Za-z][A-Za-z0-9_]*) is available as defined by "?(https?://[^"\s]+)"?$'
     actions:
-      - declareActor: { id: '$1', canonical: '$2' }
+      - declareActor: { id: '$1', role: 'infra', canonical: '$2' }
 
   - match: '^([A-Za-z][A-Za-z0-9_]*) is available as "([^"]+)"$'
     actions:
-      - declareActor: { id: '$1', name: '$2' }
+      - declareActor: { id: '$1', role: 'infra', name: '$2' }
 
   - match: '^([A-Za-z][A-Za-z0-9_]*) is available$'
     actions:
-      - declareActor: { id: '$1' }
+      - declareActor: { id: '$1', role: 'infra' }
+
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is infrastructure (?:on|at) "?(https?://[^"\s]+)"? as defined by "?(https?://[^"\s]+)"?$'
+    actions:
+      - declareActor: { id: '$1', role: 'infra', endpoint: '$2', canonical: '$3' }
+      - assign: { to: '$1Base', value: '"$2"' }
+
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is infrastructure (?:on|at) "?(https?://[^"\s]+)"?$'
+    actions:
+      - declareActor: { id: '$1', role: 'infra', endpoint: '$2' }
+      - assign: { to: '$1Base', value: '"$2"' }
+
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is infrastructure as defined by "?(https?://[^"\s]+)"?$'
+    actions:
+      - declareActor: { id: '$1', role: 'infra', canonical: '$2' }
+
+  - match: '^([A-Za-z][A-Za-z0-9_]*) is infrastructure$'
+    actions:
+      - declareActor: { id: '$1', role: 'infra' }
 
   # ==================================================================
   # 2. HTTP REQUESTS

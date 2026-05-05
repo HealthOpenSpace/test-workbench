@@ -336,26 +336,35 @@ function collectActors(ir: IRAction[]): DeclaredActor[] {
   // If no actors were declared, use defaults
   if (actors.length === 0) {
     actors.push({ id: 'Client', role: 'SUT' });
-    actors.push({ id: 'FHIRServer' });
+    actors.push({ id: 'FHIRServer', role: 'infra' });
   }
   return actors;
 }
 
+// Role mapping: our (SUT|infra) onto the GITB-faithful role attribute.
+// GITB's TDL XSD only allows role="SUT" or role="SIMULATED" at the testcase-level
+// <gitb:actor> reference, and NO role attribute on the testsuite-level actor block.
+function gitbRoleAttr(role?: string): string {
+  if (role === 'SUT') return ' role="SUT"';
+  if (role === 'infra') return ' role="SIMULATED"';
+  return '';
+}
+
 /**
  * Emit actor elements for a test case.
- * In TDL, test case actors are simple references: <actor id="..." role="..."/>
- * The role attribute is only "SUT" or "SIMULATED" (not custom strings).
+ * Test-case actors are simple GITB role references: <gitb:actor id="..." role="SUT|SIMULATED"/>.
  */
 function emitActors(actors: DeclaredActor[]): string {
   return actors.map(a => {
-    // Test case actors are simple references — endpoint config belongs in the test suite
-    const roleAttr = a.role === 'SUT' ? ' role="SUT"' : '';
-    return `<gitb:actor id="${escapeAttr(a.id)}"${roleAttr}/>`;
+    return `<gitb:actor id="${escapeAttr(a.id)}"${gitbRoleAttr(a.role)}/>`;
   }).join('\n');
 }
 
 /**
  * Emit actor elements for a test suite.
+ * Testsuite-level <gitb:actor> blocks are RICH (with <gitb:name>, <gitb:desc>) and
+ * the GITB XSD does NOT allow a role attribute here — the testcase-level reference
+ * carries the role.
  */
 function emitSuiteActors(actors: DeclaredActor[]): string {
   return actors.map(a => {
@@ -368,7 +377,9 @@ function emitSuiteActors(actors: DeclaredActor[]): string {
 }
 
 function emitIR(ir: IRAction[]): string {
-  // Find the SUT actor to use as default 'from' on send steps
+  // Default 'from' on send steps is the FIRST SUT actor declared.
+  // P2P scenarios may declare more than one SUT — that's fine; each step can still
+  // set its own `from` explicitly. We just need a sensible default.
   const sutDecl = ir.find(a => a.type === 'declareActor' && a.role === 'SUT') as { type: 'declareActor'; id: string } | undefined;
   const sutActor = sutDecl?.id || 'Client';
 

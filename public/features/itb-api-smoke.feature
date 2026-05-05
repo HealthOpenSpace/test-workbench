@@ -10,7 +10,7 @@ Feature: FHIR Validator ITB REST API smoke test
 
   Background:
     Given Client is the system under test
-    And FHIRValidator is available at "http://fhir-validator:8081"
+    And FHIRValidator is infrastructure at "http://fhir-validator:8081"
 
   Scenario: itb-smoke-001 Generate, validate, load IG, validate against IG, FHIRPath extract and assert
 

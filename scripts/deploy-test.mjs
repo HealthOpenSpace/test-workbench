@@ -220,18 +220,23 @@ function collectActors(ir) {
   }
   if (actors.length === 0) {
     actors.push({ id: 'Client', role: 'SUT' });
-    actors.push({ id: 'FHIRServer' });
+    actors.push({ id: 'FHIRServer', role: 'infra' });
   }
   return actors;
 }
 
+function gitbRoleAttr(role) {
+  if (role === 'SUT') return ' role="SUT"';
+  if (role === 'infra') return ' role="SIMULATED"';
+  return '';
+}
+
 function emitActors(actors) {
   return actors.map(a => {
-    const roleAttr = a.role === 'SUT' ? ' role="SUT"' : '';
     if (a.endpoint) {
-      return `<gitb:actor id="${escapeAttr(a.id)}"${roleAttr}>\n  <gitb:endpoint>${escapeXml(a.endpoint)}</gitb:endpoint>\n</gitb:actor>`;
+      return `<gitb:actor id="${escapeAttr(a.id)}"${gitbRoleAttr(a.role)}>\n  <gitb:endpoint>${escapeXml(a.endpoint)}</gitb:endpoint>\n</gitb:actor>`;
     }
-    return `<gitb:actor id="${escapeAttr(a.id)}"${roleAttr}/>`;
+    return `<gitb:actor id="${escapeAttr(a.id)}"${gitbRoleAttr(a.role)}/>`;
   }).join('\n');
 }
 
