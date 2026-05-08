@@ -25,7 +25,7 @@ function AppShell() {
     if (window.location.hash.includes('import')) {
       return new Set<PanelId>(['authoring']);
     }
-    return new Set<PanelId>(['language']);
+    return new Set<PanelId>(['authoring']);
   });
 
   const togglePanel = (id: PanelId) => {

@@ -1261,4 +1261,66 @@ steps:
             actualstring: '$modificationErrors'
             expectedstring: '"0"'
 
+  # ----------------------------------------------------------------------
+  # define resource "<var>" as:
+  #   """
+  #   <inline JSON / XML resource>
+  #   """
+  #
+  # Stores the docstring contents into a variable so it can be passed to other
+  # steps (validate, transform, modify, etc.) without having to generate it.
+  # ----------------------------------------------------------------------
+  - match: '^define resource "([A-Za-z_][A-Za-z0-9_]*)" as:$'
+    actions:
+      - assign:
+          to: '$1'
+          value: "'$docString'"
+
+  # ----------------------------------------------------------------------
+  # transform "<src>" using map "<url>" as "<target>"
+  #
+  # Applies a FHIR StructureMap to the resource stored in $<src> and stores
+  # the transformed result in $<target>. The StructureMap must be in the
+  # validator's context (load the IG that contains it via "FHIRValidator is
+  # loaded with package ..." first).
+  # ----------------------------------------------------------------------
+  - match: '^transform "([A-Za-z_][A-Za-z0-9_]*)" using map "([^"]+)" as "([A-Za-z_][A-Za-z0-9_]*)"$'
+    actions:
+      - assign:
+          to: 'fhirValidatorHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'fhirValidatorHeaders{Accept}'
+          value: '"application/json"'
+      - assign:
+          to: 'transformTplParams{content}'
+          value: '$$1'
+      - assign:
+          to: 'transformTplParams{map}'
+          value: '"$2"'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'transformBody'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'{ \"operation\": \"transform\", \"input\": [ { \"name\": \"content\", \"value\": \"${content?json_string}\", \"embeddingMethod\": \"STRING\" }, { \"name\": \"map\", \"value\": \"${map}\", \"embeddingMethod\": \"STRING\" }, { \"name\": \"contentType\", \"value\": \"application/fhir+json\", \"embeddingMethod\": \"STRING\" }, { \"name\": \"targetFormat\", \"value\": \"json\", \"embeddingMethod\": \"STRING\" } ] }'"
+            parameters: '$transformTplParams'
+      - send:
+          id: 'lastRequest'
+          desc: 'Apply StructureMap transformation'
+          handler: 'HttpMessagingV2'
+          inputs:
+            uri: 'concat($FHIRValidatorBase, "/itb/transform/process")'
+            method: '"POST"'
+            headers: '$fhirValidatorHeaders'
+            body: '$transformBody'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: '$3'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/output/0/value"'
+
   # Extract is provided by core language (en.yml)
