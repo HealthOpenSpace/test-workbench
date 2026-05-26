@@ -9,6 +9,8 @@ import {
   CheckCircle,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   FileCode2,
   Code2,
   Database,
@@ -50,6 +52,7 @@ function App() {
     return saved ? saved === 'dark' : window.matchMedia?.('(prefers-color-scheme: dark)').matches || false;
   });
   const [snippetsOpen, setSnippetsOpen] = useState(true);
+  const [rightOpen, setRightOpen] = useState(true);
   const [rightPanel, setRightPanel] = useState<RightPanel>('output');
   const [itbConfig, setITBConfig] = useState<ITBConfig>(loadITBConfig);
   const [itbSettingsOpen, setITBSettingsOpen] = useState(false);
@@ -473,6 +476,11 @@ function App() {
                 ))}
               </div>
             )}
+            {!rightOpen && (
+              <button onClick={() => setRightOpen(true)} className="p-1 rounded hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-500 dark:text-gray-400 transition-colors" title="Show output panel">
+                <PanelRightOpen size={16} />
+              </button>
+            )}
           </div>
 
           {/* Editor body */}
@@ -488,7 +496,7 @@ function App() {
         </div>
 
         {/* ── Right: Output / Examples ─────────────────────────────── */}
-        <div className="w-[45%] max-w-[700px] min-w-[320px] flex flex-col border-l border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+        <div className={`flex-shrink-0 flex flex-col border-l border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 transition-all duration-200 ${rightOpen ? 'w-[45%] max-w-[700px] min-w-[320px]' : 'w-0 overflow-hidden'}`}>
           {/* Right panel tabs */}
           <div className="flex items-center border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800">
             <button
@@ -535,6 +543,14 @@ function App() {
               }`}
             >
               <Puzzle size={14} /> Components
+            </button>
+            <div className="flex-1" />
+            <button
+              onClick={() => setRightOpen(false)}
+              className="p-1.5 mr-1 rounded hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-500 dark:text-gray-400 transition-colors"
+              title="Hide panel — focus on Gherkin"
+            >
+              <PanelRightClose size={16} />
             </button>
           </div>
 
