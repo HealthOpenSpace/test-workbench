@@ -24,3 +24,11 @@ actors:
     description: SMART-on-FHIR helper service
 
 language: steps.yml
+
+# Scriptlets — reusable TDL functions shipped alongside generated tests.
+# serializeJsonObject.xml is the JSON-composition primitive used by the
+# `transforms via ...` and `validates via ... targeting ...` steps to turn
+# JsonPointer-extracted objects back into valid JSON strings before they hit
+# the wire. See docs/serialize-primitive.md for rationale.
+scriptlets:
+  - serializeJsonObject.xml

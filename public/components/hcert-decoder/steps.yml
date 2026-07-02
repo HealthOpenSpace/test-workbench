@@ -70,14 +70,49 @@ steps:
               variable: '$pinValue'
 
   # Verify COSE signature on an actor (table of parameters)
-  # Inline TemplateProcessor — matches reference test-case-vhl.xml pattern
+  #
+  # Fix note (was broken): $coseRaw is a JSON object returned by
+  # JsonPointerProcessor at /cose/_raw. Embedding it with Freemarker
+  # `${cose_raw}` calls Map.toString → `{protected_bstr=..., ...}` →
+  # invalid JSON, server responds 400. We instead pull the three known
+  # scalar subfields (protected_bstr, payload_bstr, signature) with their
+  # own JsonPointer extractions and rebuild the cose_raw object inline
+  # using ?json_string. This path uses only primitives that work on every
+  # ITB build; see docs/serialize-primitive.md for the general primitive.
   - match: '^([A-Za-z][A-Za-z0-9_]*) verifies COSE signature on ([A-Za-z][A-Za-z0-9_]*) with:$'
     table:
       required: [parameter, value]
     actions:
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'coseRawProtected'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/cose/_raw/protected_bstr"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'coseRawPayload'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/cose/_raw/payload_bstr"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'coseRawSignature'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/cose/_raw/signature"'
       - assign:
-          to: 'verifyParams{cose_raw}'
-          value: '$coseRaw'
+          to: 'verifyParams{cose_raw_protected}'
+          value: '$coseRawProtected'
+      - assign:
+          to: 'verifyParams{cose_raw_payload}'
+          value: '$coseRawPayload'
+      - assign:
+          to: 'verifyParams{cose_raw_signature}'
+          value: '$coseRawSignature'
       - foreach:
           from: '$tableRows'
           do:
@@ -87,7 +122,7 @@ steps:
       - assign:
           to: 'verifyTpl'
           value: >-
-            '{"cose_raw":${cose_raw},"use_gdhcn":${use_gdhcn},"gdhcn_env":"${gdhcn_env}","participant":"${participant}","usage":"${usage}","verify_did_proof":${verify_did_proof},"allow_unverified_trustlist":${allow_unverified_trustlist},"allow_remote_contexts":${allow_remote_contexts},"context_dir":"${context_dir}"}'
+            '{"cose_raw":{"protected_bstr":"${cose_raw_protected?json_string}","payload_bstr":"${cose_raw_payload?json_string}","signature":"${cose_raw_signature?json_string}"},"use_gdhcn":${use_gdhcn},"gdhcn_env":"${gdhcn_env}","domain":"${domain!''DCC''}","participant":"${participant}","usage":"${usage}","verify_did_proof":${verify_did_proof},"allow_unverified_trustlist":${allow_unverified_trustlist},"allow_remote_contexts":${allow_remote_contexts},"context_dir":"${context_dir}"}'
       - process:
           handler: 'TemplateProcessor'
           operation: 'process'
@@ -233,6 +268,149 @@ steps:
           name: $1
           varType: string
       - log: 'concat("Variable $", "$1", " = ", $$1)'
+
+  # Decode HC1 payload — POST /decode/hcert with {qr_data,include_raw:true}
+  # Prereq: $rawQRData (typically set via `extract "/qr_data" as "rawQRData"`
+  # after `uploads a QR image to <Actor>`).
+  # Sets: $coseVal, $payloadVal, $hcertVal, $coseRaw (all consumed by
+  # subsequent extract-metadata / verify-COSE / extract-reference steps).
+  - match: '^([A-Za-z][A-Za-z0-9_]*) decodes HC1 on ([A-Za-z][A-Za-z0-9_]*)$'
+    actions:
+      - assign:
+          to: 'decodeHc1TplParams{value}'
+          value: '$rawQRData'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'decodeHc1Body'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'{\"qr_data\":\"${value?json_string}\",\"include_raw\":true}'"
+            parameters: '$decodeHc1TplParams'
+      - assign:
+          to: 'decodeHc1Headers{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'decodeHc1Headers{Accept}'
+          value: '"application/json"'
+      - send:
+          id: 'lastRequest'
+          desc: 'Decode HC1'
+          handler: 'HttpMessagingV2'
+          from: '$1'
+          to: '$2'
+          inputs:
+            uri: 'concat($$2Base, "/decode/hcert")'
+            method: '"POST"'
+            headers: '$decodeHc1Headers'
+            body: '$decodeHc1Body'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'coseVal'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/cose"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'payloadVal'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/payload"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'hcertVal'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/hcert"'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'coseRaw'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/cose/_raw"'
+
+  # Extract metadata — POST /extract/metadata with the JSON fragments
+  # {cose, payload} (raw JSON objects, not stringified) from `decodes HC1`.
+  - match: '^([A-Za-z][A-Za-z0-9_]*) extracts metadata on ([A-Za-z][A-Za-z0-9_]*)$'
+    actions:
+      - assign:
+          to: 'metaTplParams{cose}'
+          value: '$coseVal'
+      - assign:
+          to: 'metaTplParams{payload}'
+          value: '$payloadVal'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'metaBody'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'{\"cose\":${cose},\"payload\":${payload}}'"
+            parameters: '$metaTplParams'
+      - assign:
+          to: 'metaHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'metaHeaders{Accept}'
+          value: '"application/json"'
+      - send:
+          id: 'lastRequest'
+          desc: 'Extract metadata'
+          handler: 'HttpMessagingV2'
+          from: '$1'
+          to: '$2'
+          inputs:
+            uri: 'concat($$2Base, "/extract/metadata")'
+            method: '"POST"'
+            headers: '$metaHeaders'
+            body: '$metaBody'
+
+  # Extract SHL reference — POST /extract/reference with {hcert, payload}
+  # fragments; captures /url into $shlinkUrl for the SHL authorize step.
+  - match: '^([A-Za-z][A-Za-z0-9_]*) extracts SHL reference on ([A-Za-z][A-Za-z0-9_]*)$'
+    actions:
+      - assign:
+          to: 'refTplParams{hcert}'
+          value: '$hcertVal'
+      - assign:
+          to: 'refTplParams{payload}'
+          value: '$payloadVal'
+      - process:
+          handler: 'TemplateProcessor'
+          operation: 'process'
+          output: 'refBody'
+          inputs:
+            syntax: '"freemarker"'
+            template: "'{\"hcert\":${hcert},\"payload\":${payload}}'"
+            parameters: '$refTplParams'
+      - assign:
+          to: 'refHeaders{Content-Type}'
+          value: '"application/json"'
+      - assign:
+          to: 'refHeaders{Accept}'
+          value: '"application/json"'
+      - send:
+          id: 'lastRequest'
+          desc: 'Extract SHL reference'
+          handler: 'HttpMessagingV2'
+          from: '$1'
+          to: '$2'
+          inputs:
+            uri: 'concat($$2Base, "/extract/reference")'
+            method: '"POST"'
+            headers: '$refHeaders'
+            body: '$refBody'
+      - process:
+          handler: 'JsonPointerProcessor'
+          operation: 'process'
+          output: 'shlinkUrl'
+          inputs:
+            content: '$lastRequest{response}{body}'
+            pointer: '"/url"'
 
   # --- Legacy HCERT steps (QR code / CWT validation) ---
 
