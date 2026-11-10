@@ -29,34 +29,31 @@ java -jar org.hl7.fhir.validation.cli.jar -server 8080 \
 
 ### Docker / ITB deployment
 
-```dockerfile
-FROM eclipse-temurin:17-jre
-COPY org.hl7.fhir.validation.cli.jar /app/validator.jar
-EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-  CMD curl -sf -X POST http://localhost:8080/validateResource \
-    -H "Content-Type: application/fhir+json" -d '{"resourceType":"Patient"}' || exit 1
-ENTRYPOINT ["java", "-jar", "/app/validator.jar", "-server", "8080"]
+The validator is published as a container image by the WorldHealthOrganization
+fork of org.hl7.fhir.core, until the ITB changes are merged into the core
+validator: `ghcr.io/worldhealthorganization/fhir-validator:ci-build` is the
+latest build, `:itb-rest-docker-image-<sha>` a pinned one. No Dockerfile of your
+own is needed.
+
+```bash
+docker run -d --name fhir-validator -p 8080:8080 \
+  -v fhir-packages:/home/validator/.fhir \
+  -e FHIR_VERSION=4.0 \
+  ghcr.io/worldhealthorganization/fhir-validator:ci-build
 ```
 
-With IGs pre-loaded:
-
-```dockerfile
-FROM eclipse-temurin:17-jre
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
-COPY org.hl7.fhir.validation.cli.jar /app/validator.jar
-EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-  CMD curl -sf -X POST http://localhost:8080/validateResource \
-    -H "Content-Type: application/fhir+json" -d '{"resourceType":"Patient"}' || exit 1
-ENTRYPOINT ["java", "-jar", "/app/validator.jar", "-server", "8080", \
-  "-ig", "hl7.fhir.be.core#2.1.2"]
-```
+Configuration is through the environment: `FHIR_VERSION` selects the FHIR
+version (default 5.0), `VALIDATOR_ARGS` appends arguments to the server command
+(for example `-ig hl7.fhir.be.core#2.1.2` to pre-load an IG), and
+`JAVA_TOOL_OPTIONS` sets JVM options such as `-Xmx8g`. The named volume keeps
+downloaded packages across container recreates; the image runs as a non-root
+user whose home is `/home/validator`.
 
 With local IG files mounted at runtime:
 
 ```bash
-docker run -d -p 8080:8080 -v /path/to/igs:/data/igs my-validator
+docker run -d -p 8080:8080 -v /path/to/igs:/data/igs \
+  ghcr.io/worldhealthorganization/fhir-validator:ci-build
 # Then load IGs dynamically:
 curl -X POST http://localhost:8080/loadIG -H "Content-Type: application/json" \
   -d '{"ig":"/data/igs/my-custom-ig/"}'
